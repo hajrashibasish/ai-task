@@ -1,5 +1,5 @@
 ############################################
-# test_01_downloadfiles.py (Safe Mocked Test - 4 Cases)
+# test_01_downloadfiles.py (Mocked Tests - 4 Cases)
 ############################################
 
 import pytest
@@ -35,7 +35,7 @@ def test_load_doc_id_map_missing():
         result = module.load_doc_id_map("/mock/log", "fr")
         assert result == {}
 
-# ---- TEST CASE 2a: retrieve_url_list with mock AzureDB ----
+# ---- TEST CASE 2a: retrieve_url_list with mocked AzureDB ----
 def test_retrieve_url_list_with_mock_data():
     module = load_downloadfiles_module()
 
@@ -44,30 +44,40 @@ def test_retrieve_url_list_with_mock_data():
         {"url": "http://example.com/xyz.pptx", "classification": "internal", "language": "en"}
     ])
 
-    with patch.object(module.AzureDB, 'get_table_df', return_value=mock_df):
-        result = module.retrieve_url_list(MagicMock(), "internal", "en")
-        assert isinstance(result, list)
-        assert result[0]["url"].endswith("xlsx")
+    with patch.object(module.AzureDB.AzureDB, '__init__', return_value=None), \
+         patch.object(module.AzureDB.AzureDB, 'get_table_df', return_value=mock_df):
 
-# ---- TEST CASE 2b: process_entry for xlsx ----
+        db = module.AzureDB.AzureDB()
+        df = module.retrieve_url_list("internal", "en", MagicMock(), db, None, "etl", {})
+        assert isinstance(df, dict)
+
+# ---- TEST CASE 2b: process_xlsx_entry with mocked download ----
 def test_process_xlsx_entry():
     module = load_downloadfiles_module()
 
     dummy_entry = {
         "url": "http://example.com/sample.xlsx",
-        "classification": "internal",
-        "language": "en"
+        "doc_id": "XLS123"
+    }
+
+    config = {
+        "sql_db": {"etl_schema": "etl"},
+        "processing": {"log_dir": "/tmp"}
     }
 
     with patch("builtins.open", mock_open()), \
          patch("os.makedirs"), \
-         patch("hashlib.sha256") as mock_sha, \
-         patch("builtins.print") as mock_print:
+         patch("requests.get") as mock_get, \
+         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save:
 
-        mock_sha.return_value.hexdigest.return_value = "fakehash"
-        result = module.process_entry(dummy_entry, "logs", "downloads", {})
-        assert result["SHA256"] == "fakehash"
-        assert result["url"].endswith(".xlsx")
+        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy content"]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.headers = {}
+
+        module.process_xlsx_entry(dummy_entry, "internal", "en", "/tmp", MagicMock(), config)
+        assert mock_save.called
+
 
 
 =============================
