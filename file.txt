@@ -25,6 +25,46 @@ def test_load_doc_id_map_exists(mock_exists, mock_open_file):
     result = module.load_doc_id_map("/mock/log", "en")
     assert result == {"http://example.com": {"DOC_ID": "X123"}}
 
+
+=============================
+
+############################################
+# test_01_downloadfiles.py (Safe Mocked Test - 2 Cases)
+############################################
+
+import pytest
+from unittest.mock import patch, MagicMock, mock_open
+import os
+import importlib.util
+import json
+
+# ---- Helper: Load target module without mocking open globally ----
+def load_downloadfiles_module():
+    module_path = os.path.join(os.path.dirname(__file__), "../../bin/01_downloadfiles.py")
+    spec = importlib.util.spec_from_file_location("downloadfiles", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+# ---- TEST CASE 1a: load_doc_id_map exists ----
+def test_load_doc_id_map_exists():
+    module = load_downloadfiles_module()
+
+    mock_json = json.dumps({"http://example.com": {"DOC_ID": "X123"}})
+    with patch("builtins.open", mock_open(read_data=mock_json)), \
+         patch("os.path.exists", return_value=True):
+        result = module.load_doc_id_map("/mock/log", "en")
+        assert result == {"http://example.com": {"DOC_ID": "X123"}}
+
+# ---- TEST CASE 1b: load_doc_id_map missing ----
+def test_load_doc_id_map_missing():
+    module = load_downloadfiles_module()
+
+    with patch("os.path.exists", return_value=False):
+        result = module.load_doc_id_map("/mock/log", "fr")
+        assert result == {}
+
+
 @patch("os.path.exists", return_value=False)
 def test_load_doc_id_map_missing(mock_exists):
     module = load_downloadfiles_module()
