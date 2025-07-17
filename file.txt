@@ -8,6 +8,7 @@ import os
 import importlib.util
 import json
 import builtins
+import pandas as pd
 
 # ---- Helper to Patch and Load Target Module ----
 def load_downloadfiles_module():
@@ -18,7 +19,7 @@ def load_downloadfiles_module():
     return module
 
 # ---- TEST CASE 1: load_doc_id_map ----
-@patch("builtins.open", new_callable=mock_open, read_data='{"http://example.com": {"DOC_ID": "X123"}}')
+@patch("builtins.open", new_callable=mock_open, read_data=json.dumps({"http://example.com": {"DOC_ID": "X123"}}))
 @patch("os.path.exists", return_value=True)
 def test_load_doc_id_map_exists(mock_exists, mock_open_file):
     module = load_downloadfiles_module()
@@ -49,10 +50,11 @@ def test_retrieve_url_list_missing_language(mock_get_urls):
     assert result == {}
 
 # ---- TEST CASE 3: process_xlsx_entry ----
+@patch("pandas.read_excel", return_value=pd.DataFrame())
 @patch("builtins.open", new_callable=mock_open)
 @patch("requests.get")
 @patch("WGPT.MetadataProcessing.save_metadata_binary")
-def test_process_xlsx_entry(mock_save, mock_get, mock_open_file):
+def test_process_xlsx_entry(mock_save, mock_get, mock_open_file, mock_read_excel):
     module = load_downloadfiles_module()
     mock_get.return_value.iter_content = lambda chunk_size: [b"fake_xlsx"]
     mock_get.return_value.raise_for_status = lambda: None
@@ -60,7 +62,8 @@ def test_process_xlsx_entry(mock_save, mock_get, mock_open_file):
     entry = {"url": "http://example.com/sample.xlsx", "doc_id": "DOCX1"}
     config = {
         "sql_db": {"etl_schema": "etl"},
-        "processing": {"log_dir": "/tmp"}
+        "processing": {"log_dir": "/tmp"},
+        "urllist_files": {"base_dir": "/tmp/test"}
     }
     os.makedirs("/tmp/test", exist_ok=True)
     module.process_xlsx_entry(entry, "internal", "en", "/tmp/test", MagicMock(), config)
@@ -79,13 +82,15 @@ def test_process_ppt_entry(mock_save, mock_get, mock_open_file):
     entry = {"url": "http://example.com/sample.pptx", "doc_id": "PPT123"}
     config = {
         "sql_db": {"etl_schema": "etl"},
-        "processing": {"log_dir": "/tmp"}
+        "processing": {"log_dir": "/tmp"},
+        "urllist_files": {"base_dir": "/tmp/test"}
     }
     os.makedirs("/tmp/test/images", exist_ok=True)
     module.process_ppt_entry(entry, "public", "fr", "/tmp/test", MagicMock(), config)
     assert mock_save.called
 
 # ---- TEST CASE 5: download_files() orchestration ----
+@patch("pandas.read_excel", return_value=pd.DataFrame())
 @patch("WGPT.MetadataProcessing.save_metadata_binary")
 @patch("os.makedirs")
 @patch("os.path.exists", return_value=False)
@@ -93,7 +98,7 @@ def test_process_ppt_entry(mock_save, mock_get, mock_open_file):
 @patch("requests.get")
 @patch("KMAI.ingestion.DocumentList.get_urls")
 @patch("WGPT.Utilities.read_config")
-def test_download_files(mock_config, mock_get_urls, mock_requests, mock_open_file, mock_exists, mock_makedirs, mock_save):
+def test_download_files(mock_config, mock_get_urls, mock_requests, mock_open_file, mock_exists, mock_makedirs, mock_save, mock_read_excel):
     module = load_downloadfiles_module()
 
     mock_config.return_value = {
