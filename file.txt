@@ -97,8 +97,21 @@ def test_download_files(mock_config, mock_get_urls, mock_requests, mock_open_fil
     module = load_downloadfiles_module()
 
     mock_config.return_value = {
-        "sql_db": {"etl_schema": "etl"},
-        "processing": {"output_dir": "/tmp/test", "log_dir": "/tmp"},
+        "sql_db": {
+            "etl_schema": "etl",
+            "server_name": "mock_server",
+            "db_name": "mock_db"
+        },
+        "credentials": {
+            "object_id": "mock_object_id"
+        },
+        "processing": {
+            "output_dir": "/tmp/test",
+            "log_dir": "/tmp"
+        },
+        "urllist_files": {
+            "base_dir": "/tmp/test"
+        },
         "max_url_retries": 2
     }
 
