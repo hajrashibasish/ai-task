@@ -1,61 +1,61 @@
+############################################
+# test_01_downloadfiles.py (Mocked Unit Test)
+############################################
+
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
 import os
+import importlib.util
 import json
-import requests
 import builtins
-import pandas as pd
-from pathlib import Path
 
-# Helper setup to simulate env and import
-@pytest.fixture(scope="module")
-def setup_module():
-    os.environ["KMAI_VERSION"] = "1.0.3"
-    os.environ["KMAI_REPO"] = "kmai-etl"
-    os.environ["PROJECT_REPO"] = "wgpt-etl"
-    os.environ["ROOT_DIR"] = "/app1/ingestion"
-    return True
+# ---- Helper to Patch and Load Target Module ----
+def load_downloadfiles_module():
+    module_path = os.path.join(os.path.dirname(__file__), "../../bin/01_downloadfiles.py")
+    spec = importlib.util.spec_from_file_location("downloadfiles", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-# Test load_doc_id_map
+# ---- TEST CASE 1: load_doc_id_map ----
 @patch("builtins.open", new_callable=mock_open, read_data='{"http://example.com": {"DOC_ID": "X123"}}')
 @patch("os.path.exists", return_value=True)
 def test_load_doc_id_map_exists(mock_exists, mock_open_file):
-    from bin import 01_downloadfiles as module
+    module = load_downloadfiles_module()
     result = module.load_doc_id_map("/mock/log", "en")
     assert result == {"http://example.com": {"DOC_ID": "X123"}}
 
 @patch("os.path.exists", return_value=False)
 def test_load_doc_id_map_missing(mock_exists):
-    from bin import 01_downloadfiles as module
+    module = load_downloadfiles_module()
     result = module.load_doc_id_map("/mock/log", "fr")
     assert result == {}
 
-# Test retrieve_url_list for missing classification/language
+# ---- TEST CASE 2: retrieve_url_list with missing classification ----
 @patch("KMAI.ingestion.DocumentList.get_urls")
 def test_retrieve_url_list_missing_classification(mock_get_urls):
-    from bin import 01_downloadfiles as module
-    mock_get_urls.return_value = {"internal": {"fr": {}}}  # 'en' missing intentionally
+    module = load_downloadfiles_module()
+    mock_get_urls.return_value = {"internal": {"fr": {}}}
     doc_list = MagicMock()
     result = module.retrieve_url_list("internal", "en", doc_list, MagicMock(), None, "etl", {})
     assert result == {}
 
 @patch("KMAI.ingestion.DocumentList.get_urls")
 def test_retrieve_url_list_missing_language(mock_get_urls):
-    from bin import 01_downloadfiles as module
-    mock_get_urls.return_value = {"internal": {}}  # language missing
+    module = load_downloadfiles_module()
+    mock_get_urls.return_value = {"internal": {}}
     doc_list = MagicMock()
     result = module.retrieve_url_list("internal", "en", doc_list, MagicMock(), None, "etl", {})
     assert result == {}
 
-# Test XLSX download and processing
+# ---- TEST CASE 3: process_xlsx_entry ----
 @patch("builtins.open", new_callable=mock_open)
 @patch("requests.get")
 @patch("WGPT.MetadataProcessing.save_metadata_binary")
 def test_process_xlsx_entry(mock_save, mock_get, mock_open_file):
-    from bin import 01_downloadfiles as module
-    mock_get.return_value.iter_content = lambda chunk_size: [b"fake_xlsx_data"]
+    module = load_downloadfiles_module()
+    mock_get.return_value.iter_content = lambda chunk_size: [b"fake_xlsx"]
     mock_get.return_value.raise_for_status = lambda: None
-    mock_get.return_value.status_code = 200
 
     entry = {"url": "http://example.com/sample.xlsx", "doc_id": "DOCX1"}
     config = {
@@ -66,13 +66,13 @@ def test_process_xlsx_entry(mock_save, mock_get, mock_open_file):
     module.process_xlsx_entry(entry, "internal", "en", "/tmp/test", MagicMock(), config)
     assert mock_save.called
 
-# Test PPT download and processing
+# ---- TEST CASE 4: process_ppt_entry ----
 @patch("builtins.open", new_callable=mock_open)
 @patch("requests.get")
 @patch("WGPT.MetadataProcessing.save_metadata_binary")
 def test_process_ppt_entry(mock_save, mock_get, mock_open_file):
-    from bin import 01_downloadfiles as module
-    mock_get.return_value.iter_content = lambda chunk_size: [b"fake_ppt_data"]
+    module = load_downloadfiles_module()
+    mock_get.return_value.iter_content = lambda chunk_size: [b"fake_ppt"]
     mock_get.return_value.raise_for_status = lambda: None
     mock_get.return_value.headers = {}
 
@@ -85,37 +85,33 @@ def test_process_ppt_entry(mock_save, mock_get, mock_open_file):
     module.process_ppt_entry(entry, "public", "fr", "/tmp/test", MagicMock(), config)
     assert mock_save.called
 
-# Minimal test for download_files orchestration (fully mocked)
-@patch("bin.01_downloadfiles.retrieve_url_list")
-@patch("bin.01_downloadfiles.DocumentRetrieval.retrieve")
-@patch("bin.01_downloadfiles.WGPT.MetadataProcessing.save_metadata_binary")
+# ---- TEST CASE 5: download_files() orchestration ----
+@patch("WGPT.MetadataProcessing.save_metadata_binary")
 @patch("os.makedirs")
 @patch("os.path.exists", return_value=False)
 @patch("builtins.open", new_callable=mock_open)
-def test_download_files(mock_open_file, mock_exists, mock_makedirs, mock_save, mock_retrieve, mock_get_urls):
-    from bin import 01_downloadfiles as module
-    mock_get_urls.side_effect = [
-        {"internal": {"en": {"http://ppt.com": {"doc_type": "pptx", "doc_id": "PPT1", "url": "http://ppt.com"}}}},
-        {"internal": {"en": {"http://xls.com": {"doc_type": "xlsx", "doc_id": "XLS1", "url": "http://xls.com"}}}}
-    ]
-    mock_retrieve.return_value = {
-        "http://other.com": {
-            "path": "/tmp/sample.txt",
-            "type": "text",
-            "status": "success",
-            "doc_id": "TXT1"
-        }
-    }
+@patch("requests.get")
+@patch("KMAI.ingestion.DocumentList.get_urls")
+@patch("WGPT.Utilities.read_config")
+def test_download_files(mock_config, mock_get_urls, mock_requests, mock_open_file, mock_exists, mock_makedirs, mock_save):
+    module = load_downloadfiles_module()
 
-    config = {
+    mock_config.return_value = {
         "sql_db": {"etl_schema": "etl"},
         "processing": {"output_dir": "/tmp/test", "log_dir": "/tmp"},
         "max_url_retries": 2
     }
 
-    monkeypatch = MagicMock()
-    monkeypatch.setattr(module.WGPT.Utilities, "read_config", lambda: config)
+    mock_get_urls.side_effect = [
+        {"internal": {"en": {"http://ppt.com": {"doc_type": "pptx", "doc_id": "PPT1", "url": "http://ppt.com"}}}},
+        {"internal": {"en": {"http://xls.com": {"doc_type": "xlsx", "doc_id": "XLS1", "url": "http://xls.com"}}}}
+    ]
+
+    mock_requests.return_value.iter_content = lambda chunk_size: [b"file"]
+    mock_requests.return_value.raise_for_status = lambda: None
+    mock_requests.return_value.status_code = 200
+    mock_requests.return_value.headers = {}
 
     db = MagicMock()
     module.download_files("internal", "en", db)
-    assert mock_save.called or mock_retrieve.called
+    assert mock_save.called
