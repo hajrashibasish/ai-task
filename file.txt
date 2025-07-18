@@ -1,83 +1,75 @@
-############################################
-# test_01_downloadfiles.py (Mocked Tests - 4 Cases)
-############################################
-
-import pytest
-from unittest.mock import patch, MagicMock, mock_open
-import os
-import importlib.util
-import json
-import pandas as pd
-
-# ---- Helper: Load target module without mocking open globally ----
-def load_downloadfiles_module():
-    module_path = os.path.join(os.path.dirname(__file__), "../../bin/01_downloadfiles.py")
-    spec = importlib.util.spec_from_file_location("downloadfiles", module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-# ---- TEST CASE 1a: load_doc_id_map exists ----
-def test_load_doc_id_map_exists():
-    module = load_downloadfiles_module()
-
-    mock_json = json.dumps({"http://example.com": {"DOC_ID": "X123"}})
-    with patch("builtins.open", mock_open(read_data=mock_json)), \
-         patch("os.path.exists", return_value=True):
-        result = module.load_doc_id_map("/mock/log", "en")
-        assert result == {"http://example.com": {"DOC_ID": "X123"}}
-
-# ---- TEST CASE 1b: load_doc_id_map missing ----
-def test_load_doc_id_map_missing():
-    module = load_downloadfiles_module()
-
-    with patch("os.path.exists", return_value=False):
-        result = module.load_doc_id_map("/mock/log", "fr")
-        assert result == {}
-
-# ---- TEST CASE 2a: retrieve_url_list with mocked AzureDB ----
-def test_retrieve_url_list_with_mock_data():
-    module = load_downloadfiles_module()
-
-    mock_df = pd.DataFrame([
-        {"url": "http://example.com/abc.xlsx", "classification": "internal", "language": "en"},
-        {"url": "http://example.com/xyz.pptx", "classification": "internal", "language": "en"}
-    ])
-
-    with patch.object(module.AzureDB.AzureDB, '__init__', return_value=None), \
-         patch.object(module.AzureDB.AzureDB, 'get_table_df', return_value=mock_df):
-
-        db = module.AzureDB.AzureDB()
-        df = module.retrieve_url_list("internal", "en", MagicMock(), db, None, "etl", {})
-        assert isinstance(df, dict)
-
-# ---- TEST CASE 2b: process_xlsx_entry with mocked download ----
-def test_process_xlsx_entry():
-    module = load_downloadfiles_module()
-
-    dummy_entry = {
-        "url": "http://example.com/sample.xlsx",
-        "doc_id": "XLS123"
+def retrieve_url_list(classification, language, db_read, logger, url, etl_schema, doc_id_map, doc_type=None):
+    query_parameters = {
+        "etl_schema": etl_schema,
+        "classification": classification,
+        "language": language,
+        "active_flag": "Y"
     }
 
-    config = {
-        "sql_db": {"etl_schema": "etl"},
-        "processing": {"log_dir": "/tmp"}
-    }
+    document_list = DocumentList(db_read)
+    all_urls = document_list.get_urls(query_parameters, url)
 
-    with patch("builtins.open", mock_open()), \
-         patch("os.makedirs"), \
-         patch("requests.get") as mock_get, \
-         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save:
+    #debug shibasish 26thmar
+    print(f"DEBUG -->  all_urls : {json.dumps(all_urls, indent=2)}")
+    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+    print(f"classification : ", classification)
+    print(f"language : ", language)
+    print(f"doc_type : ", doc_type)
 
-        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy content"]
-        mock_get.return_value.raise_for_status = lambda: None
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.headers = {}
+    print(f"document_list is as followed:", document_list)
+    print(f"all_urls for", language, " for classification ", classification, ":: ", all_urls)
 
-        module.process_xlsx_entry(dummy_entry, "internal", "en", "/tmp", MagicMock(), config)
-        assert mock_save.called
+    if doc_type:
+        query_parameters["doc_type"] = doc_type
 
+    if classification not in all_urls:
+        logger.warning(f"Classification '{classification}' not found in all_urls. Skipping...")
+        return {}
+
+    if language not in all_urls[classification]:
+        logger.warning(f"Language '{language}' not found for classification '{classification}'. Skipping...")
+        return {}
+
+    logging.info(f"DEBUG: Retrieved URLs for classification '{classification}', language '{language}', doc_type '{doc_type}':")
+    for original_url, url_info in all_urls[classification][language].items():
+        logging.info(f"  [FETCHED URL] URL: {original_url}, Doc Type: {url_info.get('doc_type')}, DOC_ID: {url_info.get('doc_id')}")
+
+    if classification in all_urls and language in all_urls[classification]:
+        for original_url, url_info in all_urls[classification][language].items():
+            url_info["url"] = original_url
+            normalized_url = original_url.rstrip("/")
+            matched_doc_id = None
+
+            # ✅ [FIXED] DOCID extraction for ALL document types (not just ppt/xls)
+            match = re.search(r"DOCID=([A-Za-z0-9]+)", original_url, re.IGNORECASE)
+            if match and match.group(1):
+                extracted_doc_id = match.group(1).upper()
+                url_info["doc_id"] = extracted_doc_id
+                url_info["content_title"] = extracted_doc_id
+                url_info["url"] = original_url
+                doc_type_str = url_info.get("doc_type") or "unknown"
+                logging.info(f"[{doc_type_str.upper()}] Extracted and assigned doc_id from URL: {extracted_doc_id}")
+                continue  # ✅ SKIP fallback if found
+
+            # 🔽 Fallback Mapping Logic (unchanged)
+            if "#" in normalized_url:
+                normalized_url = normalized_url.split("#")[0]
+            if "?" in normalized_url:
+                normalized_url = normalized_url.split("?")[0]
+
+            for doc_key in doc_id_map:
+                if re.match(f"{re.escape(normalized_url)}.*", doc_key, re.IGNORECASE):
+                    matched_doc_id = doc_id_map[doc_key].get("DOC_ID")
+                    break
+
+            url_info["doc_id"] = matched_doc_id if matched_doc_id else url_info.get("doc_id")
+            logging.info(f"DEBUG: URL Mapping -> Original: {original_url}, Normalized: {normalized_url}, Mapped DOC_ID: {matched_doc_id}")
+
+            if not url_info["doc_id"]:
+                logging.info(f"Skipping URL with missing doc_id: {original_url}")
+                continue
+
+    return all_urls
 
 
 =============================
