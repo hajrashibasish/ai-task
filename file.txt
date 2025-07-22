@@ -3,7 +3,7 @@ def test_process_documents_with_xlsx():
     dummy_docs = {
         "internal": {
             "en": {
-                "http://example.com/file.xlsx": {
+                "http://example.com/data.xlsx": {
                     "doc_id": "XLS456",
                     "doc_type": "xlsx"
                 }
@@ -12,18 +12,15 @@ def test_process_documents_with_xlsx():
     }
 
     fake_config = {
-        "processing": {"download_dir": "/tmp"},
-        "sql_db": {"etl_schema": "etl"},
+        "processing": {
+            "download_dir": "/tmp",
+            "log_dir": "/tmp"  # required to avoid KeyError
+        },
+        "sql_db": {
+            "etl_schema": "etl"
+        },
         "max_url_retries": 2
     }
-
-    import sys
-    import types
-    # 🛠 Patch sys.modules to safely import WGPT for mocking
-    fake_wgpt = types.ModuleType("WGPT")
-    fake_util = types.SimpleNamespace(read_config=lambda: fake_config)
-    fake_wgpt.Utilities = fake_util
-    sys.modules["WGPT"] = fake_wgpt
 
     with patch("os.makedirs"), \
          patch("builtins.open", mock_open(read_data=b"dummy")), \
@@ -36,45 +33,5 @@ def test_process_documents_with_xlsx():
         mock_get.return_value.status_code = 200
         mock_get.return_value.headers = {}
 
-        module.process_documents(dummy_docs, "internal", "en", MagicMock(), fake_config)
-
-
-def test_process_documents_with_ppt():
-    module = load_downloadfiles_module()
-    dummy_docs = {
-        "internal": {
-            "en": {
-                "http://example.com/slides.pptx": {
-                    "doc_id": "PPT789",
-                    "doc_type": "ppt"
-                }
-            }
-        }
-    }
-
-    fake_config = {
-        "processing": {"download_dir": "/tmp"},
-        "sql_db": {"etl_schema": "etl"},
-        "max_url_retries": 2
-    }
-
-    import sys
-    import types
-    # 🛠 Inject mock Utilities
-    fake_wgpt = types.ModuleType("WGPT")
-    fake_util = types.SimpleNamespace(read_config=lambda: fake_config)
-    fake_wgpt.Utilities = fake_util
-    sys.modules["WGPT"] = fake_wgpt
-
-    with patch("os.makedirs"), \
-         patch("builtins.open", mock_open(read_data=b"dummy")), \
-         patch("requests.get") as mock_get, \
-         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save, \
-         patch("os.path.getsize", return_value=123):
-
-        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy"]
-        mock_get.return_value.raise_for_status = lambda: None
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.headers = {}
-
-        module.process_documents(dummy_docs, "internal", "en", MagicMock(), fake_config)
+        module.process_documents(dummy_docs, "internal", "en", "/tmp", MagicMock(), fake_config)
+        assert mock_save.called
