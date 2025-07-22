@@ -1,4 +1,14 @@
+from unittest.mock import patch, mock_open
+import os
+
+@patch.dict(os.environ, {
+    "KMAI_VERSION": "dev",
+    "ROOT_DIR": "/tmp",
+    "PROJECT_REPO": "wgpt-etl",
+    "KMAI_REPO": "kmai"
+})
 def test_download_files_orchestration():
+    import WGPT  # ✅ Safe now: env vars are temporarily injected
     module = load_downloadfiles_module()
 
     mock_urls = {
@@ -18,8 +28,7 @@ def test_download_files_orchestration():
         "max_url_retries": 3
     }
 
-    # 🔧 PATCH read_config in the exact module context
-    with patch.object(module.Utilities, "read_config", return_value=fake_config), \
+    with patch("WGPT.Utilities.read_config", return_value=fake_config), \
          patch("os.makedirs"), \
          patch("builtins.open", mock_open(read_data="{}")), \
          patch.object(module, 'load_doc_id_map', return_value={}), \
@@ -38,7 +47,6 @@ def test_download_files_orchestration():
                  "doc_id": "TXT3"
              }
          }):
-
         module.download_files("internal", "en", MagicMock())
 
         assert mock_ppt.called
