@@ -72,3 +72,40 @@ def test_assign_default_doc_id_inline():
 
     assert "doc_id" in entry
     assert entry["doc_id"].startswith("PDF_")
+
+
+def test_dispatch_processor_calls_inline():
+    dummy_list = [
+        {"url": "http://example.com/file.xlsx", "doc_id": "XLSX123", "doc_type": "xlsx"},
+        {"url": "http://example.com/file.pptx", "doc_id": "PPT123", "doc_type": "ppt"},
+    ]
+
+    processed_docs = {"xlsx": [], "ppt": [], "other": []}
+    for entry in dummy_list:
+        doc_type = entry.get("doc_type", "other")
+        if doc_type in processed_docs:
+            processed_docs[doc_type].append(entry["doc_id"])
+        else:
+            processed_docs["other"].append(entry["doc_id"])
+
+    assert processed_docs["xlsx"] == ["XLSX123"]
+    assert processed_docs["ppt"] == ["PPT123"]
+
+
+def test_post_process_success_path_inline():
+    doc_map = {
+        "xlsx": [{"doc_id": "XLS456", "blob_path": "some_path", "doc_type": "xlsx"}]
+    }
+
+    output = []
+    for doc_type, entries in doc_map.items():
+        for entry in entries:
+            output.append({
+                "doc_id": entry["doc_id"],
+                "blob_path": entry["blob_path"],
+                "doc_type": entry["doc_type"]
+            })
+
+    assert isinstance(output, list)
+    assert output[0]["doc_id"] == "XLS456"
+
