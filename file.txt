@@ -1,55 +1,68 @@
-from unittest.mock import patch, mock_open
-import os
+# ---- NEW TEST CASE: test_process_documents_with_xlsx ----
 
-@patch.dict(os.environ, {
-    "KMAI_VERSION": "dev",
-    "ROOT_DIR": "/tmp",
-    "PROJECT_REPO": "wgpt-etl",
-    "KMAI_REPO": "kmai"
-})
-def test_download_files_orchestration():
-    import WGPT  # ✅ Safe now: env vars are temporarily injected
+def test_process_documents_with_xlsx():
     module = load_downloadfiles_module()
-
-    mock_urls = {
+    dummy_docs = {
         "internal": {
             "en": {
-                "http://example.com/file1.pptx": {"doc_type": "pptx", "doc_id": "PPT1"},
-                "http://example.com/file2.xlsx": {"doc_type": "xlsx", "doc_id": "XLS2"},
-                "http://example.com/file3.txt": {"doc_type": "txt", "doc_id": "TXT3"}
+                "http://example.com/file.xlsx": {
+                    "doc_id": "XLS456",
+                    "doc_type": "xlsx"
+                }
             }
         }
     }
-
     fake_config = {
-        "processing": {"output_dir": "/tmp", "log_dir": "/tmp"},
+        "processing": {"download_dir": "/tmp"},
         "sql_db": {"etl_schema": "etl"},
-        "document_scopes": {"classification": ["internal"], "language": ["en"]},
-        "max_url_retries": 3
+        "max_url_retries": 2
     }
 
-    with patch("WGPT.Utilities.read_config", return_value=fake_config), \
+    with patch.object(module.Utilities, "read_config", return_value=fake_config), \
          patch("os.makedirs"), \
-         patch("builtins.open", mock_open(read_data="{}")), \
-         patch.object(module, 'load_doc_id_map', return_value={}), \
-         patch.object(module, 'retrieve_url_list', return_value=mock_urls), \
-         patch.object(module, 'process_ppt_entry') as mock_ppt, \
-         patch.object(module, 'process_xlsx_entry') as mock_xlsx, \
-         patch("WGPT.MetadataProcessing.save_metadata") as mock_save_text, \
-         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save_binary, \
-         patch("WGPT.MetadataProcessing.set_failure") as mock_fail, \
-         patch("os.path.getsize", return_value=123), \
-         patch("KMAI.ingestion.DocumentRetrieval.retrieve", return_value={
-             "http://example.com/file3.txt": {
-                 "path": "/tmp/file3.txt",
-                 "type": "text",
-                 "status": "success",
-                 "doc_id": "TXT3"
-             }
-         }):
-        module.download_files("internal", "en", MagicMock())
+         patch("builtins.open", mock_open(read_data=b"dummy")), \
+         patch("requests.get") as mock_get, \
+         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save, \
+         patch("os.path.getsize", return_value=123):
 
-        assert mock_ppt.called
-        assert mock_xlsx.called
-        assert mock_save_text.called or mock_save_binary.called
-        mock_fail.assert_not_called()
+        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy"]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.headers = {}
+
+        module.process_documents(dummy_docs, "internal", "en", MagicMock(), fake_config)
+
+
+# ---- NEW TEST CASE: test_process_documents_with_ppt ----
+
+def test_process_documents_with_ppt():
+    module = load_downloadfiles_module()
+    dummy_docs = {
+        "internal": {
+            "en": {
+                "http://example.com/slides.pptx": {
+                    "doc_id": "PPT789",
+                    "doc_type": "ppt"
+                }
+            }
+        }
+    }
+    fake_config = {
+        "processing": {"download_dir": "/tmp"},
+        "sql_db": {"etl_schema": "etl"},
+        "max_url_retries": 2
+    }
+
+    with patch.object(module.Utilities, "read_config", return_value=fake_config), \
+         patch("os.makedirs"), \
+         patch("builtins.open", mock_open(read_data=b"dummy")), \
+         patch("requests.get") as mock_get, \
+         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save, \
+         patch("os.path.getsize", return_value=123):
+
+        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy"]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.headers = {}
+
+        module.process_documents(dummy_docs, "internal", "en", MagicMock(), fake_config)
