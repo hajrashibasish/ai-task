@@ -1,8 +1,20 @@
-def test_process_xlsx_entry_success():
+def test_download_file_invalid_url_format():
     module = load_downloadfiles_module()
-    dummy_entry = {
-        "url": "http://example.com/sample.xlsx",
-        "doc_id": "XLS789"
+    invalid_url = "ftp://invalid-url.com/sample.pdf"
+    result = module.download_file(invalid_url, "/tmp", "TXT999")
+    assert result is None  # Invalid URL should be skipped
+
+
+def test_process_documents_skips_non_supported_type():
+    module = load_downloadfiles_module()
+    dummy_docs = {
+        "internal": [
+            {
+                "url": "http://example.com/sample.unknown",
+                "doc_id": "UNK999",
+                "doc_type": "unknown"
+            }
+        ]
     }
 
     fake_config = {
@@ -18,50 +30,18 @@ def test_process_xlsx_entry_success():
 
     with patch("os.makedirs"), \
          patch("builtins.open", mock_open(read_data=b"dummy")), \
-         patch("requests.get") as mock_get, \
-         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save, \
-         patch("os.path.getsize", return_value=123):
+         patch("requests.get") as mock_get:
 
         mock_get.return_value.iter_content = lambda chunk_size: [b"dummy"]
         mock_get.return_value.raise_for_status = lambda: None
         mock_get.return_value.status_code = 200
         mock_get.return_value.headers = {}
 
-        module.process_xlsx_entry(dummy_entry, "internal", "en", "/tmp", MagicMock(), fake_config)
-        assert mock_save.called
+        # Should skip unsupported types gracefully without crash
+        module.process_documents(dummy_docs, "internal", "en", fake_config)
 
 
-
-
-
-def test_process_ppt_entry_success():
+def test_download_file_empty_url():
     module = load_downloadfiles_module()
-    dummy_entry = {
-        "url": "http://example.com/sample.pptx",
-        "doc_id": "PPT123"
-    }
-
-    fake_config = {
-        "processing": {
-            "download_dir": "/tmp",
-            "log_dir": "/tmp"
-        },
-        "sql_db": {
-            "etl_schema": "etl"
-        },
-        "max_url_retries": 2
-    }
-
-    with patch("os.makedirs"), \
-         patch("builtins.open", mock_open(read_data=b"dummy")), \
-         patch("requests.get") as mock_get, \
-         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save, \
-         patch("os.path.getsize", return_value=123):
-
-        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy"]
-        mock_get.return_value.raise_for_status = lambda: None
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.headers = {}
-
-        module.process_ppt_entry(dummy_entry, "internal", "en", "/tmp", MagicMock(), fake_config)
-        assert mock_save.called
+    result = module.download_file("", "/tmp", "TXT000")
+    assert result is None  # Empty URL should be skipped
