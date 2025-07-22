@@ -47,3 +47,13 @@ def test_post_process_success_path_getattr():
     result = post_process(doc_map, "internal", "en", "/tmp")
     assert isinstance(result, list)
     assert result[0]["doc_id"] == "XLS456"
+
+
+
+# --- Explicitly expose functions for test access ---
+import sys
+module = sys.modules[__name__]
+setattr(module, "assign_doc_id", assign_doc_id)
+setattr(module, "process_documents", process_documents)
+setattr(module, "post_process", post_process)
+
