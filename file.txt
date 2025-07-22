@@ -1,20 +1,14 @@
-def test_process_documents_with_xlsx():
+def test_process_xlsx_entry_success():
     module = load_downloadfiles_module()
-    dummy_docs = {
-        "internal": {
-            "en": {
-                "http://example.com/data.xlsx": {
-                    "doc_id": "XLS456",
-                    "doc_type": "xlsx"
-                }
-            }
-        }
+    dummy_entry = {
+        "url": "http://example.com/sample.xlsx",
+        "doc_id": "XLS789"
     }
 
     fake_config = {
         "processing": {
             "download_dir": "/tmp",
-            "log_dir": "/tmp"  # required to avoid KeyError
+            "log_dir": "/tmp"
         },
         "sql_db": {
             "etl_schema": "etl"
@@ -33,5 +27,41 @@ def test_process_documents_with_xlsx():
         mock_get.return_value.status_code = 200
         mock_get.return_value.headers = {}
 
-        module.process_documents(dummy_docs, "internal", "en", "/tmp", MagicMock(), fake_config)
+        module.process_xlsx_entry(dummy_entry, "internal", "en", "/tmp", MagicMock(), fake_config)
+        assert mock_save.called
+
+
+
+
+
+def test_process_ppt_entry_success():
+    module = load_downloadfiles_module()
+    dummy_entry = {
+        "url": "http://example.com/sample.pptx",
+        "doc_id": "PPT123"
+    }
+
+    fake_config = {
+        "processing": {
+            "download_dir": "/tmp",
+            "log_dir": "/tmp"
+        },
+        "sql_db": {
+            "etl_schema": "etl"
+        },
+        "max_url_retries": 2
+    }
+
+    with patch("os.makedirs"), \
+         patch("builtins.open", mock_open(read_data=b"dummy")), \
+         patch("requests.get") as mock_get, \
+         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save, \
+         patch("os.path.getsize", return_value=123):
+
+        mock_get.return_value.iter_content = lambda chunk_size: [b"dummy"]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.headers = {}
+
+        module.process_ppt_entry(dummy_entry, "internal", "en", "/tmp", MagicMock(), fake_config)
         assert mock_save.called
