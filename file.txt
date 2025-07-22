@@ -11,7 +11,6 @@ def test_download_files_orchestration():
         }
     }
 
-    # Config used in place of WGPT.Utilities.read_config()
     fake_config = {
         "processing": {"output_dir": "/tmp", "log_dir": "/tmp"},
         "sql_db": {"etl_schema": "etl"},
@@ -19,7 +18,8 @@ def test_download_files_orchestration():
         "max_url_retries": 3
     }
 
-    with patch.object(module.WGPT.Utilities, "read_config", return_value=fake_config), \
+    # 🔧 PATCH read_config in the exact module context
+    with patch.object(module.Utilities, "read_config", return_value=fake_config), \
          patch("os.makedirs"), \
          patch("builtins.open", mock_open(read_data="{}")), \
          patch.object(module, 'load_doc_id_map', return_value={}), \
@@ -41,8 +41,7 @@ def test_download_files_orchestration():
 
         module.download_files("internal", "en", MagicMock())
 
-        # ✅ Assertions to ensure everything ran
-        assert mock_ppt.called, "Expected process_ppt_entry to be called"
-        assert mock_xlsx.called, "Expected process_xlsx_entry to be called"
-        assert mock_save_text.called or mock_save_binary.called, "Expected metadata saving to be triggered"
+        assert mock_ppt.called
+        assert mock_xlsx.called
+        assert mock_save_text.called or mock_save_binary.called
         mock_fail.assert_not_called()
