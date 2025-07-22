@@ -31,3 +31,20 @@ def test_update_document_change_history_inserts_and_updates():
 
     # Validate INSERT and UPDATE queries were called
     assert mock_db.executeQuery.call_count >= 3
+
+
+
+
+def test_load_file_download_meta_json():
+    import json
+    from unittest.mock import mock_open, patch
+
+    dummy_data = {"http://example.com/sample.pdf": {"url": "http://example.com/sample.pdf", "hash_256": "abc123"}}
+    mock_data = json.dumps(dummy_data)
+
+    with patch("builtins.open", mock_open(read_data=mock_data)):
+        with open("/tmp/file_download_meta.json", "r") as f:
+            loaded_data = json.load(f)
+
+    assert isinstance(loaded_data, dict)
+    assert "http://example.com/sample.pdf" in loaded_data
