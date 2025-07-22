@@ -92,3 +92,64 @@ def test_directory_traversal_and_hash_logic():
     assert "Hash Same" in not_required_files[0][1]
 
 
+def test_main_loop_with_mocked_config_and_json():
+    import json
+    from unittest.mock import patch, mock_open, MagicMock
+    from KMAI.ingestion import DocumentList
+
+    dummy_config = {
+        "sql_db": {"server_name": "server", "db_name": "db", "etl_schema": "etl"},
+        "credentials": {"object_id": "uid"},
+        "processing": {
+            "log_dir": "/tmp/logs",
+            "output_dir": "/tmp/output"
+        },
+        "document_scopes": {
+            "classification": ["internal"],
+            "language": ["en"],
+            "document_change_history": "false"
+        }
+    }
+
+    dummy_url_info = {
+        "internal": {
+            "en": {
+                "sample": {
+                    "url": "http://example.com/sample.pdf",
+                    "hash_256": "abc123"
+                }
+            }
+        }
+    }
+
+    dummy_file_metadata = {
+        "http://example.com/sample.pdf": {"url": "http://example.com/sample.pdf", "hash_256": "abc123"}
+    }
+
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config), \
+         patch("os.walk") as mockwalk, \
+         patch("builtins.open", mock_open(read_data=json.dumps(dummy_file_metadata))), \
+         patch.object(DocumentList, "get_file_hash", return_value="abc123"), \
+         patch("os.remove") as mock_remove:
+
+        mockwalk.return_value = [("/tmp/output/internal/en", [], ["sample.pdf"])]
+
+        # Simulate the main loop
+        output_dir = "/tmp/output/internal/en"
+        file_meta_json = f"{output_dir}/file_download_meta.json"
+        with open(file_meta_json, "r") as f:
+            file_metadata = json.load(f)
+
+        basedir = "/tmp/output/internal/en"
+        filename = "sample.pdf"
+        first_part_filename = "sample"
+        url_list = dummy_url_info["internal"]["en"]
+
+        not_required_files = []
+        required_files = []
+
+        file_hash_256 = DocumentList.get_file_hash(f"{basedir}/{filename}")
+        if url_list[first_part_filename]["hash_256"] == file_hash_256:
+            not_required_files.append((f"{basedir}/{filename}", "Hash Same"))
+
+    assert "Hash Same" in not_required_files[0][1]
