@@ -1,16 +1,28 @@
+import importlib.util
+
+def load_downloadfiles_module():
+    """
+    Dynamically load the 01_downloadfiles.py script for testing
+    without requiring it to be installed as a module.
+    """
+    module_name = "downloadfiles"
+    file_path = "bin/01_downloadfiles.py"  # Adjust if path differs in your project
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_assign_default_doc_id():
     module = load_downloadfiles_module()
-    assign_doc_id = getattr(module, "assign_doc_id")
     entry = {"url": "http://example.com/sample.pdf"}  # no doc_id
-    assign_doc_id(entry)
+    getattr(module, "assign_doc_id")(entry)
     assert "doc_id" in entry
     assert entry["doc_id"].startswith("PDF_")
 
 
 def test_dispatch_processor_calls():
     module = load_downloadfiles_module()
-    process_documents = getattr(module, "process_documents")
-
     dummy_list = [
         {"url": "http://example.com/file.xlsx", "doc_id": "XLSX123", "doc_type": "xlsx"},
         {"url": "http://example.com/file.pptx", "doc_id": "PPT123", "doc_type": "ppt"},
@@ -32,18 +44,17 @@ def test_dispatch_processor_calls():
         mock_get.return_value.status_code = 200
         mock_get.return_value.headers = {}
 
-        result = process_documents(dummy_list, "internal", "en", "/tmp", MagicMock(), config)
+        result = getattr(module, "process_documents")(dummy_list, "internal", "en", "/tmp", MagicMock(), config)
         assert result["xlsx"] == ["XLSX123"]
         assert result["ppt"] == ["PPT123"]
 
 
+
 def test_post_process_success_path():
     module = load_downloadfiles_module()
-    post_process = getattr(module, "post_process")
-
     doc_map = {
         "xlsx": [{"doc_id": "XLS456", "blob_path": "some_path", "doc_type": "xlsx"}]
     }
-    result = post_process(doc_map, "internal", "en", "/tmp")
+    result = getattr(module, "post_process")(doc_map, "internal", "en", "/tmp")
     assert isinstance(result, list)
     assert result[0]["doc_id"] == "XLS456"
