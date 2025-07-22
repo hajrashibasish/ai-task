@@ -1,48 +1,33 @@
-def test_assign_default_doc_id_inline():
-    entry = {"url": "http://example.com/sample.pdf"}  # no doc_id
+import pytest
+from unittest.mock import MagicMock, patch
+from datetime import datetime
 
-    # Simulate the logic of assign_doc_id
-    if "doc_id" not in entry:
-        extension = entry["url"].split(".")[-1].split("?")[0]
-        entry["doc_id"] = f"{extension.upper()}_{hash(entry['url']) % 100000}"
+import importlib.util
 
-    assert "doc_id" in entry
-    assert entry["doc_id"].startswith("PDF_")
+def load_delta_module():
+    spec = importlib.util.spec_from_file_location("delta_module", "bin/03_check_delta_files.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
+def test_process_check_delta_files_returns_urls():
+    module = load_delta_module()
+    dummy_output = {"internal": {"en": [{"url": "http://example.com"}]}}
+    mock_db = MagicMock()
 
-def test_process_documents_inline():
-    dummy_list = [
-        {"url": "http://example.com/file.xlsx", "doc_id": "XLSX123", "doc_type": "xlsx"},
-        {"url": "http://example.com/file.pptx", "doc_id": "PPT123", "doc_type": "ppt"}
-    ]
+    with patch.object(module.DocumentList, "get_urls_by_hash", return_value=dummy_output):
+        result = module.process_check_delta_files("internal", "en", mock_db, "etl")
+        assert result == dummy_output
 
-    # Simulate dispatch logic from process_documents
-    result = {"xlsx": [], "ppt": []}
-    for entry in dummy_list:
-        doc_type = entry.get("doc_type", "").lower()
-        if doc_type == "xlsx":
-            result["xlsx"].append(entry["doc_id"])
-        elif doc_type == "ppt":
-            result["ppt"].append(entry["doc_id"])
-
-    assert result["xlsx"] == ["XLSX123"]
-    assert result["ppt"] == ["PPT123"]
-
-
-def test_post_process_inline():
-    doc_map = {
-        "xlsx": [{"doc_id": "XLS456", "blob_path": "some_path", "doc_type": "xlsx"}]
+def test_update_document_change_history_inserts_and_updates():
+    module = load_delta_module()
+    mock_db = MagicMock()
+    hash_changes = {
+        123: {"old_hash": "abc", "new_hash": "def"},
+        456: {"old_hash": None, "new_hash": "ghi"},  # should be skipped
     }
 
-    # Simulate flattening logic of post_process
-    output = []
-    for doc_type, docs in doc_map.items():
-        for entry in docs:
-            output.append({
-                "doc_id": entry["doc_id"],
-                "blob_path": entry.get("blob_path", ""),
-                "doc_type": doc_type
-            })
+    module.update_document_change_history(mock_db, hash_changes, etl_schema="etl")
 
-    assert isinstance(output, list)
-    assert output[0]["doc_id"] == "XLS456"
+    # Validate INSERT and UPDATE queries were called
+    assert mock_db.executeQuery.call_count >= 3
