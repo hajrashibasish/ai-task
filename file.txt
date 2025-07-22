@@ -1,118 +1,48 @@
-def retrieve_url_list(classification, language, db_read, logger, url, etl_schema, doc_id_map, doc_type=None):
-    query_parameters = {
-        "etl_schema": etl_schema,
-        "classification": classification,
-        "language": language,
-        "active_flag": "Y"
+def test_download_files_orchestration():
+    module = load_downloadfiles_module()
+
+    mock_urls = {
+        "internal": {
+            "en": {
+                "http://example.com/file1.pptx": {"doc_type": "pptx", "doc_id": "PPT1"},
+                "http://example.com/file2.xlsx": {"doc_type": "xlsx", "doc_id": "XLS2"},
+                "http://example.com/file3.txt": {"doc_type": "txt", "doc_id": "TXT3"}
+            }
+        }
     }
 
-    document_list = DocumentList(db_read)
-    all_urls = document_list.get_urls(query_parameters, url)
+    # Config used in place of WGPT.Utilities.read_config()
+    fake_config = {
+        "processing": {"output_dir": "/tmp", "log_dir": "/tmp"},
+        "sql_db": {"etl_schema": "etl"},
+        "document_scopes": {"classification": ["internal"], "language": ["en"]},
+        "max_url_retries": 3
+    }
 
-    #debug shibasish 26thmar
-    print(f"DEBUG -->  all_urls : {json.dumps(all_urls, indent=2)}")
-    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
-    print(f"classification : ", classification)
-    print(f"language : ", language)
-    print(f"doc_type : ", doc_type)
+    with patch.object(module.WGPT.Utilities, "read_config", return_value=fake_config), \
+         patch("os.makedirs"), \
+         patch("builtins.open", mock_open(read_data="{}")), \
+         patch.object(module, 'load_doc_id_map', return_value={}), \
+         patch.object(module, 'retrieve_url_list', return_value=mock_urls), \
+         patch.object(module, 'process_ppt_entry') as mock_ppt, \
+         patch.object(module, 'process_xlsx_entry') as mock_xlsx, \
+         patch("WGPT.MetadataProcessing.save_metadata") as mock_save_text, \
+         patch("WGPT.MetadataProcessing.save_metadata_binary") as mock_save_binary, \
+         patch("WGPT.MetadataProcessing.set_failure") as mock_fail, \
+         patch("os.path.getsize", return_value=123), \
+         patch("KMAI.ingestion.DocumentRetrieval.retrieve", return_value={
+             "http://example.com/file3.txt": {
+                 "path": "/tmp/file3.txt",
+                 "type": "text",
+                 "status": "success",
+                 "doc_id": "TXT3"
+             }
+         }):
 
-    print(f"document_list is as followed:", document_list)
-    print(f"all_urls for", language, " for classification ", classification, ":: ", all_urls)
+        module.download_files("internal", "en", MagicMock())
 
-    if doc_type:
-        query_parameters["doc_type"] = doc_type
-
-    if classification not in all_urls:
-        logger.warning(f"Classification '{classification}' not found in all_urls. Skipping...")
-        return {}
-
-    if language not in all_urls[classification]:
-        logger.warning(f"Language '{language}' not found for classification '{classification}'. Skipping...")
-        return {}
-
-    logging.info(f"DEBUG: Retrieved URLs for classification '{classification}', language '{language}', doc_type '{doc_type}':")
-    for original_url, url_info in all_urls[classification][language].items():
-        logging.info(f"  [FETCHED URL] URL: {original_url}, Doc Type: {url_info.get('doc_type')}, DOC_ID: {url_info.get('doc_id')}")
-
-    if classification in all_urls and language in all_urls[classification]:
-        for original_url, url_info in all_urls[classification][language].items():
-            url_info["url"] = original_url
-            normalized_url = original_url.rstrip("/")
-            matched_doc_id = None
-
-            # ✅ [FIXED] DOCID extraction for ALL document types (not just ppt/xls)
-            match = re.search(r"DOCID=([A-Za-z0-9]+)", original_url, re.IGNORECASE)
-            if match and match.group(1):
-                extracted_doc_id = match.group(1).upper()
-                url_info["doc_id"] = extracted_doc_id
-                url_info["content_title"] = extracted_doc_id
-                url_info["url"] = original_url
-                doc_type_str = url_info.get("doc_type") or "unknown"
-                logging.info(f"[{doc_type_str.upper()}] Extracted and assigned doc_id from URL: {extracted_doc_id}")
-                continue  # ✅ SKIP fallback if found
-
-            # 🔽 Fallback Mapping Logic (unchanged)
-            if "#" in normalized_url:
-                normalized_url = normalized_url.split("#")[0]
-            if "?" in normalized_url:
-                normalized_url = normalized_url.split("?")[0]
-
-            for doc_key in doc_id_map:
-                if re.match(f"{re.escape(normalized_url)}.*", doc_key, re.IGNORECASE):
-                    matched_doc_id = doc_id_map[doc_key].get("DOC_ID")
-                    break
-
-            url_info["doc_id"] = matched_doc_id if matched_doc_id else url_info.get("doc_id")
-            logging.info(f"DEBUG: URL Mapping -> Original: {original_url}, Normalized: {normalized_url}, Mapped DOC_ID: {matched_doc_id}")
-
-            if not url_info["doc_id"]:
-                logging.info(f"Skipping URL with missing doc_id: {original_url}")
-                continue
-
-    return all_urls
-
-
-=============================
-
-############################################
-# test_01_downloadfiles.py (Safe Mocked Test - 2 Cases)
-############################################
-
-import pytest
-from unittest.mock import patch, MagicMock, mock_open
-import os
-import importlib.util
-import json
-
-# ---- Helper: Load target module without mocking open globally ----
-def load_downloadfiles_module():
-    module_path = os.path.join(os.path.dirname(__file__), "../../bin/01_downloadfiles.py")
-    spec = importlib.util.spec_from_file_location("downloadfiles", module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-# ---- TEST CASE 1a: load_doc_id_map exists ----
-def test_load_doc_id_map_exists():
-    module = load_downloadfiles_module()
-
-    mock_json = json.dumps({"http://example.com": {"DOC_ID": "X123"}})
-    with patch("builtins.open", mock_open(read_data=mock_json)), \
-         patch("os.path.exists", return_value=True):
-        result = module.load_doc_id_map("/mock/log", "en")
-        assert result == {"http://example.com": {"DOC_ID": "X123"}}
-
-# ---- TEST CASE 1b: load_doc_id_map missing ----
-def test_load_doc_id_map_missing():
-    module = load_downloadfiles_module()
-
-    with patch("os.path.exists", return_value=False):
-        result = module.load_doc_id_map("/mock/log", "fr")
-        assert result == {}
-
-
-@patch("os.path.exists", return_value=False)
-def test_load_doc_id_map_missing(mock_exists):
-    module = load_downloadfiles_module()
-    result = module.load_doc_id_map("/mock/log", "fr")
-    assert result == {}
+        # ✅ Assertions to ensure everything ran
+        assert mock_ppt.called, "Expected process_ppt_entry to be called"
+        assert mock_xlsx.called, "Expected process_xlsx_entry to be called"
+        assert mock_save_text.called or mock_save_binary.called, "Expected metadata saving to be triggered"
+        mock_fail.assert_not_called()
