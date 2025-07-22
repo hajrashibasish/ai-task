@@ -1,20 +1,16 @@
-def test_read_config_missing_keys(monkeypatch):
-    from WGPT import Utilities
-
-    monkeypatch.setattr(Utilities, "read_config", lambda: {})
-    config = Utilities.read_config()
-    assert isinstance(config, dict)
-
 def test_assign_default_doc_id():
     module = load_downloadfiles_module()
+    assign_doc_id = getattr(module, "assign_doc_id")
     entry = {"url": "http://example.com/sample.pdf"}  # no doc_id
-    module.assign_doc_id(entry)
+    assign_doc_id(entry)
     assert "doc_id" in entry
     assert entry["doc_id"].startswith("PDF_")
 
 
 def test_dispatch_processor_calls():
     module = load_downloadfiles_module()
+    process_documents = getattr(module, "process_documents")
+
     dummy_list = [
         {"url": "http://example.com/file.xlsx", "doc_id": "XLSX123", "doc_type": "xlsx"},
         {"url": "http://example.com/file.pptx", "doc_id": "PPT123", "doc_type": "ppt"},
@@ -36,17 +32,18 @@ def test_dispatch_processor_calls():
         mock_get.return_value.status_code = 200
         mock_get.return_value.headers = {}
 
-        result = module.process_documents(dummy_list, "internal", "en", "/tmp", MagicMock(), config)
+        result = process_documents(dummy_list, "internal", "en", "/tmp", MagicMock(), config)
         assert result["xlsx"] == ["XLSX123"]
         assert result["ppt"] == ["PPT123"]
 
 
 def test_post_process_success_path():
     module = load_downloadfiles_module()
+    post_process = getattr(module, "post_process")
+
     doc_map = {
         "xlsx": [{"doc_id": "XLS456", "blob_path": "some_path", "doc_type": "xlsx"}]
     }
-    result = module.post_process(doc_map, "internal", "en", "/tmp")
+    result = post_process(doc_map, "internal", "en", "/tmp")
     assert isinstance(result, list)
     assert result[0]["doc_id"] == "XLS456"
-    
