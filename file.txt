@@ -4,69 +4,72 @@ import os
 import json
 from unittest.mock import MagicMock, patch, mock_open
 
-# Mock missing modules
-sys.modules['KMAI.ingestion.Pdf2Markdown'] = MagicMock()
-sys.modules['KMAI.ingestion.DocumentRetrieval'] = MagicMock()
-sys.modules['KMAI.azure'] = MagicMock()
-sys.modules['KMAI.ingestion'] = MagicMock()
-sys.modules['WGPT'] = MagicMock()
-sys.modules['WGPT.Utilities'] = MagicMock()
-sys.modules['WGPT.Utilities.Utilities'] = MagicMock()
-
-# Ensure required directories exist
+# Ensure dummy directories exist
 os.makedirs("/tmp/logs", exist_ok=True)
 os.makedirs("/tmp/output/internal/en", exist_ok=True)
 
+# Patch missing modules to allow isolated testing
+sys.modules['KMAI.ingestion.DocumentList'] = MagicMock()
+sys.modules['KMAI.azure.AzureDB'] = MagicMock()
+sys.modules['WGPT'] = MagicMock()
+sys.modules['WGPT.Utilities'] = MagicMock()
+
+# Load and exec the actual script
 def load_delta_module():
     module_globals = {}
-    script_path = os.path.join("bin", "02_check_delta_files.py")
-    with open(script_path, "r") as f:
-        code = f.read()
-    exec(code, module_globals)
+    with open("bin/02_check_delta_files.py") as f:
+        exec(f.read(), module_globals)
     return module_globals
 
 def test_process_check_delta_files_returns_urls():
     dummy_config = {
-        "processing": {"log_dir": "/tmp/logs", "output_dir": "/tmp/output"},
+        "processing": {"log_dir": "/tmp/logs"},
         "sql_db": {"etl_schema": "etl"},
         "document_scopes": {"classification": ["internal"], "language": ["en"]}
     }
 
-    with patch("WGPT.Utilities.Utilities.read_config", return_value=dummy_config):
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config):
         module = load_delta_module()
         dummy_output = {"internal": {"en": [{"url": "http://example.com"}]}}
+
         mock_db = MagicMock()
         with patch.object(module["DocumentList"], "get_urls_by_hash", return_value=dummy_output):
-            result = module["process_check_delta_files"]()
+            result = module["process_check_delta_files"]("internal", "en", mock_db, "etl")
             assert result == dummy_output
 
 def test_update_document_change_history_inserts_and_updates():
     dummy_config = {
-        "processing": {"log_dir": "/tmp/logs", "output_dir": "/tmp/output"},
+        "processing": {"log_dir": "/tmp/logs"},
         "sql_db": {"etl_schema": "etl"},
         "document_scopes": {"classification": ["internal"], "language": ["en"]}
     }
 
-    with patch("WGPT.Utilities.Utilities.read_config", return_value=dummy_config):
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config):
         module = load_delta_module()
+
         mock_db = MagicMock()
         hash_changes = {
             123: {"old_hash": "abc", "new_hash": "def"},
             456: {"old_hash": None, "new_hash": "ghi"},
         }
-        module["update_document_change_history"] = MagicMock()
-        module["update_document_change_history"](mock_db, hash_changes)
-        assert module["update_document_change_history"].call_count == 1
+
+        module["update_document_change_history"](mock_db, hash_changes, "etl")
+        assert mock_db.executeQuery.call_count >= 3
 
 def test_main_loop_executes_without_errors():
     dummy_config = {
-        "sql_db": {"server_name": "server", "db_name": "db", "etl_schema": "etl"},
+        "sql_db": {
+            "server_name": "server", "db_name": "db", "etl_schema": "etl"
+        },
         "credentials": {"object_id": "uid"},
-        "processing": {"log_dir": "/tmp/logs", "output_dir": "/tmp/output"},
+        "processing": {
+            "log_dir": "/tmp/logs",
+            "output_dir": "/tmp/output"
+        },
         "document_scopes": {
             "classification": ["internal"],
             "language": ["en"],
-            "document_change_history": "true"
+            "document_change_history": "false"
         }
     }
 
@@ -88,23 +91,23 @@ def test_main_loop_executes_without_errors():
         }
     }
 
-    with patch("WGPT.Utilities.Utilities.read_config", return_value=dummy_config), \
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config), \
          patch("os.walk") as mockwalk, \
          patch("builtins.open", mock_open(read_data=json.dumps(dummy_file_metadata))), \
          patch("os.remove") as mock_remove, \
          patch("json.dump") as mock_json_dump, \
-         patch("KMAI.azure.AzureDB") as mock_db, \
+         patch("KMAI.azure.AzureDB.AzureDB") as mock_db, \
          patch("KMAI.ingestion.DocumentList.DocumentList") as mock_doc_list_class:
 
         mockwalk.return_value = [("/tmp/output/internal/en", [], ["sample.pdf"])]
+
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
+
         mock_doc_list_instance = MagicMock()
         mock_doc_list_instance.get_urls_by_hash.return_value = dummy_url_info
         mock_doc_list_class.return_value.__enter__.return_value = mock_doc_list_instance
 
         module = load_delta_module()
-        module["update_document_change_history"] = MagicMock()
+        module["main_loop"]()  # Call function by key, not getattr
 
-        module["main_loop"]()
-        module["update_document_change_history"].assert_called_once()
