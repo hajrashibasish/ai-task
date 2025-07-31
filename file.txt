@@ -3,3 +3,61 @@ if __name__ != "__main__":
     globals()["main_loop"] = main_loop
     globals()["process_check_delta_files"] = process_check_delta_files
     globals()["update_document_change_history"] = update_document_change_history
+
+
+def test_main_loop_executes_without_errors():
+    dummy_config = {
+        "sql_db": {"server_name": "server", "db_name": "db", "etl_schema": "etl"},
+        "credentials": {"object_id": "uid"},
+        "processing": {"log_dir": "/tmp/logs", "output_dir": "/tmp/output"},
+        "document_scopes": {
+            "classification": ["internal"],
+            "language": ["en"],
+            "document_change_history": "true"
+        }
+    }
+
+    dummy_file_metadata = {
+        "http://example.com/sample.pdf": {
+            "url": "http://example.com/sample.pdf",
+            "hash_256": "abc123"
+        }
+    }
+
+    dummy_url_info = {
+        "internal": {
+            "en": {
+                "sample": {
+                    "url": "http://example.com/sample.pdf",
+                    "hash_256": "abc123"
+                }
+            }
+        }
+    }
+
+    with patch("WGPT.Utilities.Utilities.read_config", return_value=dummy_config), \
+         patch("os.walk") as mockwalk, \
+         patch("builtins.open", mock_open(read_data=json.dumps(dummy_file_metadata))), \
+         patch("os.remove") as mock_remove, \
+         patch("json.dump") as mock_json_dump, \
+         patch("KMAI.azure.AzureDB") as mock_db, \
+         patch("KMAI.ingestion.DocumentList.DocumentList") as mock_doc_list_class:
+
+        mockwalk.return_value = [("/tmp/output/internal/en", [], ["sample.pdf"])]
+
+        mock_db_instance = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_db_instance
+
+        mock_doc_list_instance = MagicMock()
+        mock_doc_list_instance.get_urls_by_hash.return_value = dummy_url_info
+        mock_doc_list_class.return_value.__enter__.return_value = mock_doc_list_instance
+
+        # ✅ Load the module and call the injected function
+        module = load_delta_module()
+        module["update_document_change_history"] = MagicMock()
+
+        # ✅ This works because of the globals() injection
+        module["main_loop"]()
+
+        module["update_document_change_history"].assert_called_once()
+
