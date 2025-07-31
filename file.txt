@@ -1,9 +1,56 @@
-# --- Expose methods for unit tests ---
-if __name__ != "__main__":
-    globals()["main_loop"] = main_loop
-    globals()["process_check_delta_files"] = process_check_delta_files
-    globals()["update_document_change_history"] = update_document_change_history
+import os
+import json
+import builtins
+import types
+from unittest.mock import patch, mock_open, MagicMock
+import pytest
 
+# Ensure test directories exist to avoid FileNotFoundError
+os.makedirs("/tmp/logs", exist_ok=True)
+os.makedirs("/tmp/output/internal/en", exist_ok=True)
+
+# Dynamic import with globals() injection support
+def load_delta_module():
+    import importlib.util
+    script_path = "bin/02_check_delta_files.py"
+    spec = importlib.util.spec_from_file_location("check_delta_files", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def test_process_check_delta_files_returns_urls():
+    dummy_config = {
+        "processing": {"log_dir": "/tmp/logs"},
+        "sql_db": {"etl_schema": "etl"},
+        "document_scopes": {"classification": ["internal"], "language": ["en"]}
+    }
+
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config):
+        module = load_delta_module()
+        mock_db = MagicMock()
+        dummy_output = [{"id": 1, "url": "http://example.com/doc1.pdf"}]
+
+        with patch("KMAI.ingestion.DocumentList.DocumentList.get_urls_by_hash", return_value=dummy_output):
+            result = module.process_check_delta_files("internal", "en", mock_db, "etl")
+            assert result == dummy_output
+
+def test_update_document_change_history_inserts_and_updates():
+    dummy_config = {
+        "processing": {"log_dir": "/tmp/logs"},
+        "sql_db": {"etl_schema": "etl"},
+        "document_scopes": {"classification": ["internal"], "language": ["en"]}
+    }
+
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config):
+        module = load_delta_module()
+        mock_db = MagicMock()
+        hash_changes = {
+            1: {"old_hash": "abc123", "new_hash": "def456"},
+            2: {"old_hash": None, "new_hash": "xyz789"}  # Should be filtered out
+        }
+
+        module.update_document_change_history(mock_db, hash_changes, "etl")
+        assert mock_db.executeQuery.called
 
 def test_main_loop_executes_without_errors():
     dummy_config = {
@@ -35,7 +82,7 @@ def test_main_loop_executes_without_errors():
         }
     }
 
-    with patch("WGPT.Utilities.Utilities.read_config", return_value=dummy_config), \
+    with patch("WGPT.Utilities.read_config", return_value=dummy_config), \
          patch("os.walk") as mockwalk, \
          patch("builtins.open", mock_open(read_data=json.dumps(dummy_file_metadata))), \
          patch("os.remove") as mock_remove, \
@@ -52,12 +99,15 @@ def test_main_loop_executes_without_errors():
         mock_doc_list_instance.get_urls_by_hash.return_value = dummy_url_info
         mock_doc_list_class.return_value.__enter__.return_value = mock_doc_list_instance
 
-        # ✅ Load the module and call the injected function
         module = load_delta_module()
-        module["update_document_change_history"] = MagicMock()
 
-        # ✅ This works because of the globals() injection
-        module["main_loop"]()
+        # Patch the injected function if needed
+        if not hasattr(module, "main_loop") and "main_loop" in module.__dict__:
+            module.main_loop = module.__dict__["main_loop"]
 
-        module["update_document_change_history"].assert_called_once()
+        module.update_document_change_history = MagicMock()
 
+        # ✅ Execute safely
+        module.main_loop()
+
+        module.update_document_change_history.assert_called_once()
