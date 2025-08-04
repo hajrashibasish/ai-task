@@ -41,3 +41,37 @@ def test_process_doc_conversion_unsupported_filetype(load_module):
 
         result = load_module.process_doc_conversion("en", "internal", MagicMock())
         assert result == {"file.unsupported": {"status": "unsupported file type"}}
+
+
+
+config_mock = {
+    "processing": {
+        "log_dir": "/tmp/logs",
+        "output_dir": "/tmp/output",
+        "md_dir": "/tmp/md",
+        "internal": {}  # Required for config["processing"]["internal"]
+    },
+    "sql_db": {
+        "server_name": "localhost",
+        "db_name": "test_db",
+        "etl_schema": "etl"
+    },
+    "document_scopes": {
+        "filter_columns": {
+            "key": "value"
+        }
+    },
+    "credentials": {
+        "object_id": "dummy"
+    },
+    "open_ai": {  # Needed for PDF and PPT tests
+        "client_id": "dummy",
+        "gpt_4o_model": "gpt-4o",
+        "endpoint_url": "https://dummy.openai.azure.com",
+        "openai_api_version": "2023-12-01-preview",
+        "pdf_conversion_prompt": "Convert this PDF",
+        "pdf_conversion_dpi": 200,
+        "ppt_conversion_prompt": "Convert this PPT"
+    }
+}
+
