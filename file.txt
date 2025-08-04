@@ -1,97 +1,136 @@
-import pytest
-from unittest.mock import patch, MagicMock
-import os
+def test_update_document_change_history_with_and_without_hash_changes(load_module):
+    mock_db = MagicMock()
 
+    # Case 1: No hash_changes (None)
+    load_module.update_document_change_history(mock_db, hash_changes=None, etl_schema="etl")
+    assert mock_db.executeQuery.call_count == 2  # insert + update inactive
 
-@pytest.fixture
-def load_module(import_module):
-    """Helper function to import the checkdeltafiles module with mocked os.environ."""
-    os.environ["KMAI_VERSION"] = "dev"
-    os.environ["PROJECT_REPO"] = "wgpt-etl"
-    os.environ["ROOT_DIR"] = "/app1/ingestion"
-    os.environ["KMAI_REPO"] = "kmai"
-    os.environ["INGESTION_CONFIG_FILE"] = "wgpt-etl-dev.json"
+    mock_db.reset_mock()
 
-    return import_module("checkdeltafiles", os.path.abspath(__file__))
-
-
-def test_process_check_delta_files(load_module):
-    mock_db_handle = MagicMock()
-    mock_doc_list = MagicMock()
-    mock_doc_list.get_urls_by_hash.return_value = {
-        "classification": {"language": {"file1": {"hash_256": "abc123"}}}
+    # Case 2: With valid hash_changes
+    hash_changes = {
+        "doc1": {"old_hash": "abc", "new_hash": "xyz"},
+        "doc2": {"old_hash": None, "new_hash": "xyz"}  # should be filtered
     }
 
-    # Configure context manager behavior
-    mock_doc_list.__enter__.return_value = mock_doc_list
-
-    with patch.object(load_module, "DocumentList", return_value=mock_doc_list):
-        result = load_module.process_check_delta_files(
-            classification="classification",
-            language="language",
-            db_handle=mock_db_handle,
-            etl_schema=None
-        )
-
-    assert result == {"classification": {"language": {"file1": {"hash_256": "abc123"}}}}
+    load_module.update_document_change_history(mock_db, hash_changes=hash_changes, etl_schema="etl")
+    assert mock_db.executeQuery.call_count == 4  # 2 for insert/update + 2 for hash changes
 
 
-@patch("builtins.open", new_callable=MagicMock)
-def test_main_loop_executes_without_errors(mock_open, load_module):
-    # Patch file system
-    mock_os = MagicMock()
-    mock_os.walk.return_value = [
-        ("/tmp/output/internal/en", [], ["file1.pdf", "file2.meta.json"])
-    ]
-    mock_os.remove = MagicMock()
-    mock_os.path.splitext = os.path.splitext
+def test_main_loop_handles_empty_url_info(load_module):
+    mock_db = MagicMock()
+    mock_doc_list = MagicMock()
+    mock_doc_list.__enter__.return_value.get_urls_by_hash.return_value = {}
 
-    # Patch DocumentList
-    mock_doc_list_instance = MagicMock()
-    mock_doc_list_instance.get_urls_by_hash.return_value = {
-        "internal": {
-            "en": {
+    with patch.object(load_module, "AzureDB", return_value=mock_db), \
+         patch.object(load_module, "DocumentList", return_value=mock_doc_list):
+        load_module.main_loop()  # Should complete without exceptions
+
+
+def test_main_loop_reads_meta_file(load_module):
+    mock_db = MagicMock()
+    dummy_json = {
+        "http://example.com/doc1": {
+            "filename": "file1", "hash": "abc123"
+        }
+    }
+
+    mock_doc_list = MagicMock()
+    mock_doc_list.__enter__.return_value.get_urls_by_hash.return_value = {
+        "classification": {
+            "language": {
                 "file1": {
-                    "hash_256": "abc123",
-                    "url": "http://example.com/file1"
+                    "url": "http://example.com/doc1",
+                    "hash_256": "abc123"
                 }
             }
         }
     }
 
-    mock_doc_list = MagicMock(return_value=mock_doc_list_instance)
+    with patch("builtins.open", mock_open(read_data=json.dumps(dummy_json))) as m, \
+         patch.object(load_module, "AzureDB", return_value=mock_db), \
+         patch.object(load_module, "DocumentList", return_value=mock_doc_list), \
+         patch.object(load_module, "os") as mock_os:
 
-    # Patch config loader
-    mock_read_config = MagicMock(return_value={
-        "sql_db": {
-            "server_name": "test_server",
-            "db_name": "test_db",
-            "etl_schema": "etl"
-        },
-        "credentials": {"object_id": "test_object_id"},
-        "processing": {
-            "log_dir": "/tmp/logs",
-            "output_dir": "/tmp/output"
-        },
-        "document_scopes": {
-            "classification": ["internal"],
-            "language": ["en"],
-            "document_change_history": False
+        mock_os.walk.return_value = [
+            ("/output/classification/language", [], ["file1.txt"])
+        ]
+        mock_os.path.splitext = os.path.splitext
+        mock_os.remove = MagicMock()
+        mock_os.path.exists.return_value = True
+
+        load_module.main_loop()
+
+    m.assert_any_call("/output/classification/language/file_download_meta.json", "r")
+
+
+def test_main_loop_handles_none_url_key(load_module):
+    mock_db = MagicMock()
+    dummy_json = {
+        "http://example.com/abc": {
+            "filename": "file1", "hash": "abc123"
         }
-    })
+    }
 
-    # Patch AzureDB context
-    mock_azure_db = MagicMock()
-    mock_azure_db.__enter__.return_value = mock_azure_db
+    mock_doc_list = MagicMock()
+    mock_doc_list.__enter__.return_value.get_urls_by_hash.return_value = {
+        "classification": {
+            "language": {
+                None: {
+                    "url": "http://example.com/abc",
+                    "hash_256": "abc123"
+                }
+            }
+        }
+    }
 
-    with patch.object(load_module, "os", mock_os), \
-         patch.object(load_module, "WGPT") as mock_wgpt, \
-         patch.object(load_module, "DocumentList", mock_doc_list), \
-         patch.object(load_module, "AzureDB", return_value=mock_azure_db):
+    with patch("builtins.open", mock_open(read_data=json.dumps(dummy_json))), \
+         patch.object(load_module, "AzureDB", return_value=mock_db), \
+         patch.object(load_module, "DocumentList", return_value=mock_doc_list), \
+         patch.object(load_module, "os") as mock_os:
 
-        mock_wgpt.Utilities.read_config = mock_read_config
+        mock_os.walk.return_value = [
+            ("/output/classification/language", [], ["file1.txt"])
+        ]
+        mock_os.path.splitext = os.path.splitext
+        mock_os.remove = MagicMock()
 
-        load_module.main_loop()  # This should now run without error
+        load_module.main_loop()
 
-    # Confirm required_files_meta.json is attempted to be written
-    mock_open.assert_any_call("/tmp/output/internal/en/required_files_meta.json", "w")
+
+def test_main_loop_removes_unwanted_files_and_dumps_required(load_module):
+    mock_db = MagicMock()
+    file_meta = {
+        "http://example.com/doc1": {
+            "filename": "file1", "hash": "abc123"
+        }
+    }
+
+    mock_doc_list = MagicMock()
+    mock_doc_list.__enter__.return_value.get_urls_by_hash.return_value = {
+        "classification": {
+            "language": {
+                "file1": {
+                    "url": "http://example.com/doc1",
+                    "hash_256": "abc123"
+                }
+            }
+        }
+    }
+
+    with patch("builtins.open", mock_open(read_data=json.dumps(file_meta))) as m, \
+         patch.object(load_module, "AzureDB", return_value=mock_db), \
+         patch.object(load_module, "DocumentList", return_value=mock_doc_list), \
+         patch.object(load_module, "os") as mock_os, \
+         patch("json.dump") as mock_json_dump:
+
+        mock_os.walk.return_value = [
+            ("/output/classification/language", [], ["file1.txt"])
+        ]
+        mock_os.path.splitext = os.path.splitext
+        mock_os.remove = MagicMock()
+
+        load_module.main_loop()
+
+    mock_os.remove.assert_called_once()
+    mock_json_dump.assert_called_once()
