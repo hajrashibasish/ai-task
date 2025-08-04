@@ -1,21 +1,33 @@
+import pytest
+from unittest.mock import patch, MagicMock
+import os
+
+
+@pytest.fixture
+def load_module(import_module):
+    load_module = import_module("doc_conversion", os.path.abspath(__file__))
+    return load_module
+
+
 def test_process_doc_conversion_unsupported_filetype(load_module):
-    logger = MagicMock()
+    # Only required config fields for the main script logic
     config_mock = {
         "processing": {
-            "log_dir": "/tmp",
-            "output_dir": "/tmp/output"
+            "log_dir": "/tmp/logs",
+            "output_dir": "/tmp/output",
+            "md_dir": "/tmp/md"
+        },
+        "sql_db": {
+            "server_name": "localhost",
+            "db_name": "test_db",
+            "etl_schema": "etl"
         }
     }
 
-    urls_mock = {
-        "doc1.xyz": {
-            "status": "Pending",
-            "output_dir": "/tmp/output/internal/en",
-            "language": "en"
-        }
-    }
-
-    os_walk_return = [("/tmp/output/internal/en", [], ["doc1.xyz"])]
+    urls_mock = {"file.unsupported": {"document_id": "123"}}
+    os_walk_return = [
+        ("/tmp/output/internal/en", [], ["file.unsupported"])
+    ]
 
     with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
          patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
@@ -27,6 +39,5 @@ def test_process_doc_conversion_unsupported_filetype(load_module):
         mock_os.makedirs = MagicMock()
         mock_os.path.splitext = os.path.splitext
 
-        result = load_module.process_doc_conversion("en", "internal", logger)
-
-        assert result == {"doc1.xyz": {"status": "Unsupported File Format"}}
+        result = load_module.process_doc_conversion("en", "internal", MagicMock())
+        assert result == {"file.unsupported": {"status": "unsupported file type"}}
