@@ -1,0 +1,49 @@
+@patch("builtins.open", new_callable=mock_open, read_data="PDF text content")
+def test_process_pdf_to_markdown(mock_open, load_module):
+    mock_document_processing = MagicMock()
+    mock_dp_instance = MagicMock()
+    mock_dp_instance.run_pipeline.return_value = "markdown from pdf"
+    mock_document_processing.return_value = mock_dp_instance
+
+    file_path = "/path/to/file.pdf"
+    output_dir = "/output"
+    language = "en"
+    return_values = {}
+
+    with patch.object(load_module, "DocumentProcessing", mock_document_processing):
+        result = load_module.process_pdf_to_markdown(file_path, output_dir, language, return_values)
+
+        assert result["status"] == "Successful"
+        assert result["document_length"] == len("markdown from pdf")
+
+        mock_open.assert_any_call(file_path, "rb")
+        mock_open.assert_any_call(f"{output_dir}/file.md", "w")
+        mock_dp_instance.run_pipeline.assert_called_once_with(
+            input_data="PDF text content",
+            paragraph=True,
+            link=True,
+            language=language,
+            return_value=return_values
+        )
+
+
+  @patch("builtins.open", new_callable=mock_open, read_data="Slide 1\nSlide 2")
+def test_process_ppt_to_markdown(mock_open, load_module):
+    mock_ppt_converter = MagicMock()
+    mock_ppt_instance = MagicMock()
+    mock_ppt_instance.convert.return_value = "markdown from ppt"
+    mock_ppt_converter.return_value = mock_ppt_instance
+
+    file_path = "/path/to/file.pptx"
+    output_dir = "/output"
+    language = "en"
+    return_values = {}
+
+    with patch.object(load_module, "Ppt2Markdown", mock_ppt_converter):
+        result = load_module.process_ppt_to_markdown(file_path, output_dir, language, return_values)
+
+        assert result["status"] == "Successful"
+        assert result["document_length"] == len("markdown from ppt")
+
+        mock_open.assert_any_call(f"{output_dir}/file.md", "w")
+        mock_ppt_instance.convert.assert_called_once_with(file_path, output_dir, return_values)
