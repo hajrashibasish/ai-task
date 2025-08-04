@@ -1,7 +1,8 @@
 def test_process_ppt_to_markdown(load_module):
     mock_ppt = MagicMock()
     mock_instance = MagicMock()
-    mock_instance.convert.return_value = "ppt markdown content"
+    # ✅ Return two values as expected by the main function
+    mock_instance.convert.return_value = ("slides.md", 123)
     mock_ppt.return_value = mock_instance
 
     return_values = {}
@@ -13,4 +14,5 @@ def test_process_ppt_to_markdown(load_module):
 
     assert isinstance(result, dict)
     assert result.get("status") == "Successful"
-    assert result.get("document_length") == len("ppt markdown content")
+    assert result.get("document_length") == 123
+    assert result.get("md_file_location") == "slides.md"
