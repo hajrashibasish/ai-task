@@ -160,8 +160,10 @@ def test_process_ppt_to_markdown(load_module):
 ====================
 
 
+
 def test_process_doc_conversion_html(load_module):
     logger = MagicMock()
+
     config_mock = {
         "processing": {
             "output_dir": "/tmp/output",
@@ -191,21 +193,23 @@ def test_process_doc_conversion_html(load_module):
         }
     }
 
-    # 🛠 FIX: Provide valid filenames (non-empty) in mock
     os_walk_return = [
-        ("/tmp/output/internal/en", [], ["doc1.html", "something.meta.json"])
+        ("/tmp/output/internal/en", [], ["doc1.html", "file.meta.json"])
     ]
 
     with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
          patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
          patch.object(load_module, "os") as mock_os, \
-         patch.object(load_module, "process_html_to_markdown", return_value={"status": "Successful"}):
+         patch.object(load_module, "process_html_to_markdown", return_value={"status": "Successful"}) as mock_html:
+
         mock_os.walk.return_value = os_walk_return
         mock_os.path.exists.return_value = True
         mock_os.remove = MagicMock()
         mock_os.makedirs = MagicMock()
-        mock_os.path.splitext = os.path.splitext  # 🛠 Critical to avoid empty split
+        mock_os.path.splitext = os.path.splitext
+
         result = load_module.process_doc_conversion("en", "internal", logger)
-        assert result is not None
 
-
+        # ✅ Final assertion
+        assert result == {"doc1.html": {"status": "Successful"}}
+        mock_html.assert_called_once()
