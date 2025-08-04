@@ -44,34 +44,50 @@ def test_process_doc_conversion_unsupported_filetype(load_module):
 
 
 
-config_mock = {
-    "processing": {
-        "log_dir": "/tmp/logs",
-        "output_dir": "/tmp/output",
-        "md_dir": "/tmp/md",
-        "internal": {}  # Required for config["processing"]["internal"]
-    },
-    "sql_db": {
-        "server_name": "localhost",
-        "db_name": "test_db",
-        "etl_schema": "etl"
-    },
-    "document_scopes": {
-        "filter_columns": {
-            "key": "value"
+    config_mock = {
+        "processing": {
+            "log_dir": "/tmp/logs",
+            "output_dir": "/tmp/output",
+            "md_dir": "/tmp/md"
+        },
+        "sql_db": {
+            "etl_schema": "mock_schema"
         }
-    },
-    "credentials": {
-        "object_id": "dummy"
-    },
-    "open_ai": {  # Needed for PDF and PPT tests
-        "client_id": "dummy",
-        "gpt_4o_model": "gpt-4o",
-        "endpoint_url": "https://dummy.openai.azure.com",
-        "openai_api_version": "2023-12-01-preview",
-        "pdf_conversion_prompt": "Convert this PDF",
-        "pdf_conversion_dpi": 200,
-        "ppt_conversion_prompt": "Convert this PPT"
     }
-}
 
+    classification = "internal"
+    language = "en"
+
+    # Properly structured urls mock as expected in main script
+    urls_mock = {
+        classification: {
+            language: [
+                {
+                    "file": "doc1.xyz",
+                    "status": "pending",
+                    "output_dir": f"/tmp/output/{classification}/{language}",
+                    "language": language
+                }
+            ]
+        }
+    }
+
+    # Simulate os.walk to detect 1 file
+    os_walk_return = [
+        (f"/tmp/output/{classification}/{language}", [], ["doc1.xyz"])
+    ]
+
+    with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
+         patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
+         patch.object(load_module, "os") as mock_os:
+
+        # Patch os-related operations
+        mock_os.walk.return_value = os_walk_return
+        mock_os.path.exists.return_value = True
+        mock_os.remove = MagicMock()
+        mock_os.makedirs = MagicMock()
+        mock_os.path.splitext = os.path.splitext
+        mock_os.path.join = os.path.join
+
+        result = load_module.process_doc_conversion("en", "internal", MagicMock())
+        assert result == {"file.unsupported": {"status": "unsupported file type"}}
