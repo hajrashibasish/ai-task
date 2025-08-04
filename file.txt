@@ -159,6 +159,20 @@ def test_process_ppt_to_markdown(load_module):
 
 ====================
 
+import pytest
+from unittest.mock import patch, MagicMock
+import os
+
+
+@pytest.fixture
+def load_module(import_module):
+    os.environ["KMAI_VERSION"] = "dev"
+    os.environ["PROJECT_REPO"] = "wgpt-etl"
+    os.environ["ROOT_DIR"] = "/app1/ingestion"
+    os.environ["KMAI_REPO"] = "kmai"
+    os.environ["INGESTION_CONFIG_FILE"] = "wgpt-etl-dev.json"
+
+    return import_module("doc_conversion", os.path.abspath(__file__))
 
 
 def test_process_doc_conversion_html(load_module):
@@ -185,16 +199,19 @@ def test_process_doc_conversion_html(load_module):
         "failed_document_threshold_pct": 1.0
     }
 
+    # Must match exact filename in os.walk + keys in retrieve_url_list
     urls_mock = {
         "internal": {
             "en": {
-                "http://example.com/doc1.html": {"doc_id": "doc1"}
+                "http://example.com/doc1.html": {
+                    "doc_id": "doc1"
+                }
             }
         }
     }
 
     os_walk_return = [
-        ("/tmp/output/internal/en", [], ["doc1.html", "file.meta.json"])
+        ("/tmp/output/internal/en", [], ["doc1.html"])
     ]
 
     with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
@@ -208,8 +225,9 @@ def test_process_doc_conversion_html(load_module):
         mock_os.makedirs = MagicMock()
         mock_os.path.splitext = os.path.splitext
 
+        # Simulate actual file mapping: input file must match a key in retrieve_url_list
         result = load_module.process_doc_conversion("en", "internal", logger)
 
-        # ✅ Final assertion
+        # ✅ Expected format
         assert result == {"doc1.html": {"status": "Successful"}}
         mock_html.assert_called_once()
