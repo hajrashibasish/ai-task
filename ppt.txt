@@ -1,0 +1,16 @@
+def test_process_ppt_to_markdown(load_module):
+    mock_ppt = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.convert.return_value = "ppt markdown content"
+    mock_ppt.return_value = mock_instance
+
+    return_values = {}
+    file_path = "/ppt/slides.pptx"
+    output_dir = "/output"
+
+    with patch.object(load_module, "Ppt2Markdown", mock_ppt):
+        result = load_module.process_ppt_to_markdown(file_path, output_dir, return_values)
+
+    assert isinstance(result, dict)
+    assert result.get("status") == "Successful"
+    assert result.get("document_length") == len("ppt markdown content")
