@@ -1,8 +1,12 @@
 def test_process_doc_conversion_unsupported_filetype(load_module):
     logger = MagicMock()
-    config_mock = {"processing": {"log_dir": "/tmp"}}
+    config_mock = {
+        "processing": {
+            "log_dir": "/tmp",
+            "output_dir": "/tmp/output"
+        }
+    }
 
-    # Fix: Include required metadata keys like 'output_dir'
     urls_mock = {
         "doc1.xyz": {
             "status": "Pending",
