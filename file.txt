@@ -148,3 +148,64 @@ def test_process_ppt_to_markdown(load_module):
         assert result["status"] == "Successful"
         assert result["document_length"] == 1000
 
+
+
+
+
+
+
+
+
+
+====================
+
+
+def test_process_doc_conversion_html(load_module):
+    logger = MagicMock()
+    config_mock = {
+        "processing": {
+            "output_dir": "/tmp/output",
+            "md_dir": "/tmp/md"
+        },
+        "sql_db": {
+            "etl_schema": "etl",
+            "server_name": "srv",
+            "db_name": "db"
+        },
+        "credentials": {
+            "object_id": "xyz"
+        },
+        "document_scopes": {
+            "classification": ["internal"],
+            "language": ["en"],
+            "filter_columns": {"key": "value"}
+        },
+        "failed_document_threshold_pct": 1.0
+    }
+
+    urls_mock = {
+        "internal": {
+            "en": {
+                "http://example.com/doc1.html": {"doc_id": "doc1"}
+            }
+        }
+    }
+
+    # 🛠 FIX: Provide valid filenames (non-empty) in mock
+    os_walk_return = [
+        ("/tmp/output/internal/en", [], ["doc1.html", "something.meta.json"])
+    ]
+
+    with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
+         patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
+         patch.object(load_module, "os") as mock_os, \
+         patch.object(load_module, "process_html_to_markdown", return_value={"status": "Successful"}):
+        mock_os.walk.return_value = os_walk_return
+        mock_os.path.exists.return_value = True
+        mock_os.remove = MagicMock()
+        mock_os.makedirs = MagicMock()
+        mock_os.path.splitext = os.path.splitext  # 🛠 Critical to avoid empty split
+        result = load_module.process_doc_conversion("en", "internal", logger)
+        assert result is not None
+
+
