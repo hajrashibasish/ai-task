@@ -146,3 +146,18 @@ def test_process_doc_conversion_unsupported_filetype(load_module):
             "file": {"status": "unsupported file type"}
         }
 
+
+urls_mock = {
+    "internal": {
+        "en": {
+            "file.unsupported": {
+                "doc_id": "mock_doc_001",
+                "status": "pending",
+                "output_dir": "/tmp/output/internal/en",
+                "language": "en"
+            }
+        }
+    }
+}
+
+
