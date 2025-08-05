@@ -1,0 +1,179 @@
+import sys
+import os
+import json
+from datetime import datetime
+import logging
+
+# Generate a timestamp for filenames
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# ✅ Enrichment function added here
+def enrich_with_flags(metadata_json, db, etl_schema="etl"):
+    doc_ids = list(metadata_json.keys())
+    if not doc_ids:
+        return metadata_json
+
+    placeholders = ",".join("?" for _ in doc_ids)
+    sql = f"""
+    SELECT doc_md_document_id, DI, FP, PIA, PIC, TDCT, PT
+    FROM {etl_schema}.document_list
+    WHERE doc_md_document_id IN ({placeholders})
+    """
+    try:
+        col_desc, rows = db.read_template_sql(sql, doc_ids)
+        flag_map = {
+            row[0]: {
+                "DI": row[1], "FP": row[2], "PIA": row[3],
+                "PIC": row[4], "TDCT": row[5], "PT": row[6]
+            } for row in rows
+        }
+
+        for doc_id in metadata_json:
+            flags = flag_map.get(doc_id, {
+                "DI": 0, "FP": 0, "PIA": 0, "PIC": 0, "TDCT": 0, "PT": 0
+            })
+            metadata_json[doc_id].update(flags)
+
+    except Exception as e:
+        logging.error(f"❌ Error enriching metadata with DI/FP/etc flags: {str(e)}", exc_info=True)
+
+    return metadata_json
+# ✅ Enrichment function ends
+
+def main():
+    # These are specified in env.cfg, imported via .sh file.
+    KMAI_VERSION = os.environ['KMAI_VERSION']
+    project_repo = os.environ['PROJECT_REPO']
+    kmai_repo = os.environ['KMAI_REPO']
+    project_root_dir = os.environ['ROOT_DIR']
+
+    sys.path.append(f"{project_root_dir}/{kmai_repo}/{KMAI_VERSION}/libs")
+    sys.path.append(f"{project_root_dir}/{project_repo}/bin/libs")
+
+    from KMAI.azure import AzureADLS, AzureDB
+    from KMAI.ingestion import DocumentList
+    import WGPT
+
+    # Load configuration
+    config = WGPT.Utilities.read_config()
+    server_name = config["sql_db"]["server_name"]
+    db_name = config["sql_db"]["db_name"]
+    object_id = config["credentials"]["object_id"]
+    etl_schema = config["sql_db"]["etl_schema"]
+    document_scopes = config.get("document_scopes")
+
+    adls_storage = config["adls_storage"]
+    storage_account = adls_storage["storage_account"]
+    container_names = adls_storage["container_names"]
+    # archive_directory_metadata = adls_storage["archive_directory_metadata"]
+    target_directory_metadata = adls_storage["target_directory_metadata"]
+
+    msi_client_id = config["credentials"]["client_id"]
+
+    # Set up logging
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"generate_meta_json_{timestamp}.log"
+    log_dir = config["processing"]["log_dir"]
+    log_file_path = f"{log_dir}/{log_filename}"
+    print(f"Log Location for this run:", log_file_path)
+
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    logging.basicConfig(filename=log_file_path, level=logging.INFO, force=True)
+    logging.getLogger().handlers[0].flush()
+
+    # ✅ Main processing logic
+    with AzureDB(server_name=server_name, db_name=db_name, uid=object_id) as db_read:
+        dl = DocumentList(db_read)
+
+        for language in document_scopes.get("language", []):
+            # Define the file path for the current run
+            file_path = f"/app1/ingestion/wgpt-etl/process_downloads/metadata-{language}-{timestamp}.json"
+
+            # Query parameters
+            query_parameters = {
+                "etl_schema": etl_schema,
+                "active_flag": "Y",
+                "language": language
+            }
+
+            # Generate metadata JSON
+            meta_json = dl.generate_metajson(query_parameters)
+            print(f"meta json content : ", meta_json)
+
+            # ✅ Enrich metadata with DI, FP, PIA, PIC, TDCT, PT
+            meta_json = enrich_with_flags(meta_json, db_read, etl_schema)
+            print(f"meta json content after enrichment: ", meta_json)
+
+            # Write metadata to file
+            with open(file_path, "w") as file:
+                json.dump(meta_json, file, indent=4)
+
+            # Initialize AzureADLS
+            container_name = container_names.get(language, "default_container")
+            msi_client_id = config["credentials"]["client_id"]
+
+            adls_client = AzureADLS(
+                storage_account_name=storage_account,
+                msi_client_id=msi_client_id,
+                container_name=container_name
+            )
+
+            # Archive existing blobs
+            directory_listing = adls_client.getDirectoryListing(
+                path=target_directory_metadata[language], recursive=True
+            )
+
+            for blob in directory_listing:
+                blob_name = blob["name"]
+                if "metadata-" in blob_name:
+                    archive_blob_name = blob_name.replace(
+                        target_directory_metadata[language],
+                        archive_directory_metadata[language],
+                        1
+                    )
+
+                    # Download the blob to a local temp file
+                    temp_file = f"/tmp/{os.path.basename(blob_name)}"
+                    adls_client.file_download(
+                        source_container=container_name,
+                        source_path=os.path.dirname(blob_name),
+                        source_file=os.path.basename(blob_name),
+                        target_directory="/tmp",
+                        target_file=os.path.basename(temp_file)
+                    )
+
+                    # Upload the blob to the archive directory
+                    adls_client.upload_blob(
+                        full_path_file=temp_file,
+                        container_name=container_name,
+                        target_directory=archive_directory_metadata[language],
+                        overwrite=True
+                    )
+
+                    # Remove the original blob
+                    adls_client.file_remove(
+                        container=container_name,
+                        target_path=os.path.dirname(blob_name),
+                        target_filename=os.path.basename(blob_name)
+                    )
+
+            # Upload the current metadata file
+            print("Uploading new metadata file...")
+            new_filename = f"meta-{language}.json"
+            new_filepath = os.path.join(os.path.dirname(file_path), new_filename)
+            os.rename(file_path, new_filepath)
+            adls_client.upload_blob(
+                full_path_file=new_filepath,
+                container_name=container_name,
+                target_directory=target_directory_metadata[language],
+                overwrite=True
+            )
+
+            # ✅ NEW FEATURE: Upload metadata to ARCHIVAL container
+            # archive_uploader.upload_metadata_to_archive("internal", language, new_filepath)
+            # archive_uploader.upload_metadata_to_archive("public", language, new_filepath)
+
+if __name__ == "__main__":
+    main()
