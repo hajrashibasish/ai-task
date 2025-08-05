@@ -164,44 +164,51 @@ urls_mock = {
 
 
 def test_main_loop_invocation(load_module):
-    # Full config mock with all required keys
+    # Mocked config
     config_mock = {
-        "processing": {
-            "log_dir": "/tmp/logs",
-            "output_dir": "/tmp/output",
-            "md_dir": "/tmp/md"
-        },
         "sql_db": {
             "server_name": "mock_server",
             "db_name": "mock_db",
             "etl_schema": "mock_schema"
         },
         "credentials": {
-            "object_id": "mock_object_id"
+            "object_id": "mock_obj_id"
         },
         "document_scopes": {
-            "filter_columns": {}
+            "classification": ["internal"]
+        },
+        "processing": {
+            "log_dir": "/tmp/logs",
+            "output_dir": "/tmp/output",
+            "md_dir": "/tmp/md"
         },
         "failed_document_threshold_pct": 0.5
     }
 
-    # Mock DB and empty file list
-    mock_db = MagicMock()
-    urls_mock = {"internal": {"en": []}}  # No files to process
+    # Minimal urls mock (empty files for internal/en)
+    urls_mock = {
+        "internal": {
+            "en": []
+        }
+    }
 
+    # Patch everything needed by main_loop()
     with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
-         patch.object(load_module, "AzureDB", return_value=mock_db), \
+         patch.object(load_module, "AzureDB", return_value=MagicMock()), \
          patch.object(load_module, "DocumentList") as mock_doclist, \
+         patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
          patch.object(load_module, "os") as mock_os:
 
-        # Setup mocks
         mock_doclist_instance = MagicMock()
         mock_doclist_instance.get_urls.return_value = urls_mock
         mock_doclist.return_value = mock_doclist_instance
 
         mock_os.walk.return_value = []
         mock_os.path.exists.return_value = True
+        mock_os.remove = MagicMock()
+        mock_os.makedirs = MagicMock()
+        mock_os.path.splitext = os.path.splitext
+        mock_os.path.join = os.path.join
 
-        # Run main_loop
+        # This will run main_loop() fully and hit the "no files to process" early return
         load_module.main_loop()
-
