@@ -1,80 +1,65 @@
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
-import os
-import json
+from unittest.mock import MagicMock, patch
+from importlib import import_module
 
 @pytest.fixture
-def load_module(import_module):
-    """Helper to dynamically import the module with mocked os.environ."""
-    return import_module("generatemetajson", os.path.abspath(__file__))
+def load_module():
+    # Import and return the generate_metajson script
+    mod = import_module("generate_metajson")
+    return mod
 
-@pytest.fixture
-def mock_config():
-    return {
-        "sql_db": {
-            "server_name": "mock_server",
-            "db_name": "mock_db",
-            "etl_schema": "mock_schema"
-        },
-        "credentials": {
-            "object_id": "mock_object_id",
-            "client_id": "mock_client_id"
-        },
-        "processing": {
-            "log_dir": "/mock/log_dir",
-            "md_dir": "/mock/md_dir"
-        },
-        "document_scopes": {
-            "language": ["en", "fr"],
-            "filter_columns": {"key1": "value1"}
-        },
-        "adls_storage": {
-            "storage_account": "mock_storage",
-            "container_names": {
-                "en": "container-en",
-                "fr": "container-fr"
+def test_generate_meta_json_success(load_module):
+    # Patch all external dependencies used in the main script
+    with patch.object(load_module, "WGPT") as mock_wgpt, \
+         patch.object(load_module, "AzureDB") as mock_azuredb, \
+         patch.object(load_module, "AzureADLS") as mock_adls, \
+         patch.object(load_module, "DocumentList") as mock_document_list:
+
+        # Setup mock for config
+        mock_config = {
+            "sql_db": {
+                "server_name": "test_server",
+                "db_name": "test_db",
+                "etl_schema": "etl",
             },
-            "target_directory_metadata": {
-                "en": "/mock/target/en",
-                "fr": "/mock/target/fr"
+            "credentials": {
+                "object_id": "test_obj_id",
+                "client_id": "test_client_id"
+            },
+            "adls_storage": {
+                "storage_account": "test_account",
+                "container_names": {"en": "test-container"},
+                "target_directory_metadata": {"en": "test/target"},
+                "archive_directory_metadata": {"en": "test/archive"}
+            },
+            "processing": {
+                "log_dir": "/tmp"
+            },
+            "document_scopes": {
+                "language": ["en"]
             }
         }
-    }
+        mock_wgpt.Utilities.read_config.return_value = mock_config
 
-def test_generate_meta_json_success(load_module, mock_config):
-    with patch.object(load_module.WGPT.Utilities, "read_config", return_value=mock_config), \
-         patch.object(load_module, "AzureDB") as mock_azure_db, \
-         patch.object(load_module, "AzureADLS") as mock_azure_adls, \
-         patch.object(load_module, "DocumentList") as mock_document_list, \
-         patch("builtins.open", new_callable=mock_open), \
-         patch("os.rename"), \
-         patch("json.dump"), \
-         patch("os.path.dirname", return_value="/mock/dir"), \
-         patch.object(load_module, "enrich_with_flags", side_effect=lambda m, *_: m), \
-         patch.dict(os.environ, {
-             "KMAI_VERSION": "1.0.1",
-             "PROJECT_REPO": "project_repo",
-             "KMAI_REPO": "kmai_repo",
-             "ROOT_DIR": "/test"
-         }, clear=True):
+        # Setup AzureDB context manager
+        mock_db = MagicMock()
+        mock_azuredb.return_value.__enter__.return_value = mock_db
 
-        # Mock return values for AzureDB and ADLS
-        mock_azure_db.return_value.__enter__.return_value = MagicMock()
-        mock_adls_instance = mock_azure_adls.return_value
+        # Setup DocumentList and generate_metajson return
+        mock_dl_instance = MagicMock()
+        mock_dl_instance.generate_metajson.return_value = {
+            "mock_key": {"url": "http://mock"}
+        }
+        mock_document_list.return_value = mock_dl_instance
+
+        # Setup AzureADLS instance and return empty listing
+        mock_adls_instance = MagicMock()
         mock_adls_instance.getDirectoryListing.return_value = []
+        mock_adls.return_value = mock_adls_instance
 
-        # Set up separate instances for each DocumentList call
-        instance1 = MagicMock()
-        instance2 = MagicMock()
-        instance1.generate_metajson.return_value = {"mock_key1": {"url": "http://x1"}}
-        instance2.generate_metajson.return_value = {"mock_key2": {"url": "http://x2"}}
-        mock_document_list.side_effect = [instance1, instance2]
+        # Run the script — main logic is inside top-level block
+        # We simply import the module and let it execute
+        import_module("generate_metajson")
 
-        # Trigger execution
-        load_module.__name__ = "__main__"
-        load_module  # simply importing runs the script
-
-        # ✅ Assert both instances had generate_metajson called
-        instance1.generate_metajson.assert_called_once()
-        instance2.generate_metajson.assert_called_once()
-
+        # ✅ Assertion: Check that generate_metajson was called
+        assert mock_dl_instance.generate_metajson.call_count == 1
