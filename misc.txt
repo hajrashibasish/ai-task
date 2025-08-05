@@ -21,7 +21,7 @@ mock_config = {
         "storage_account": "mock_storage",
         "container_names": {"en": "mock_container", "fr": "mock_container"},
         "target_directory_metadata": {"en": "mock/target", "fr": "mock/target"},
-        "archive_directory_metadata": {"en": "mock/archive", "fr": "mock/archive"}
+        "archive_directory_metadata": {"en": "mock/archive", "fr": "mock/archive"}  # ✅ Added this
     },
     "processing": {
         "log_dir": "/mock/logs"
@@ -75,5 +75,5 @@ def test_generate_meta_json_main_success(mock_read_config, load_module):
 
         # ✅ Assert ADLS archive handled
         assert mock_adls_inst.getDirectoryListing.call_count == 2
-        assert mock_adls_inst.upload_blob.call_count >= 2  # archive + final
+        assert mock_adls_inst.upload_blob.call_count >= 2  # includes final upload
         assert mock_adls_inst.file_remove.call_count >= 1
