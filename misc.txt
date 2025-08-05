@@ -46,8 +46,8 @@ def test_generate_meta_json_success(load_module, mock_config):
          patch.object(load_module, "AzureDB") as mock_azure_db, \
          patch.object(load_module, "AzureADLS") as mock_azure_adls, \
          patch.object(load_module, "DocumentList") as mock_document_list, \
-         patch("builtins.open", new_callable=mock_open) as mock_open_file, \
-         patch("os.rename") as mock_rename, \
+         patch("builtins.open", new_callable=mock_open), \
+         patch("os.rename"), \
          patch("json.dump"), \
          patch("os.path.dirname", return_value="/mock/dir"), \
          patch.object(load_module, "enrich_with_flags", side_effect=lambda m, *_: m), \
@@ -58,21 +58,23 @@ def test_generate_meta_json_success(load_module, mock_config):
              "ROOT_DIR": "/test"
          }, clear=True):
 
-        # Mock return values for DB and ADLS
+        # Mock return values for AzureDB and ADLS
         mock_azure_db.return_value.__enter__.return_value = MagicMock()
         mock_adls_instance = mock_azure_adls.return_value
         mock_adls_instance.getDirectoryListing.return_value = []
 
-        # Create and assign DocumentList mock with generate_metajson
-        mock_dl_instance = MagicMock()
-        mock_dl_instance.generate_metajson.return_value = {
-            "mock_key": {"url": "http://x"}
-        }
-        mock_document_list.return_value = mock_dl_instance
+        # Set up separate instances for each DocumentList call
+        instance1 = MagicMock()
+        instance2 = MagicMock()
+        instance1.generate_metajson.return_value = {"mock_key1": {"url": "http://x1"}}
+        instance2.generate_metajson.return_value = {"mock_key2": {"url": "http://x2"}}
+        mock_document_list.side_effect = [instance1, instance2]
 
-        # Simulate running the script (since it's not under a main() block)
+        # Trigger execution
         load_module.__name__ = "__main__"
-        load_module  # Simply running the script import
+        load_module  # simply importing runs the script
 
-        # ✅ Assert generate_metajson was called twice (for "en" and "fr")
-        assert mock_document_list.return_value.generate_metajson.call_count == 2
+        # ✅ Assert both instances had generate_metajson called
+        instance1.generate_metajson.assert_called_once()
+        instance2.generate_metajson.assert_called_once()
+
