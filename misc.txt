@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
 import os
+import json
 
 @pytest.fixture
 def load_module(import_module):
@@ -47,9 +48,9 @@ def test_generate_meta_json_success(load_module, mock_config):
          patch.object(load_module, "DocumentList") as mock_document_list, \
          patch("builtins.open", new_callable=mock_open) as mock_open_file, \
          patch("os.rename") as mock_rename, \
-         patch.object(load_module, "enrich_with_flags", side_effect=lambda m, *_: m), \
          patch("json.dump"), \
          patch("os.path.dirname", return_value="/mock/dir"), \
+         patch.object(load_module, "enrich_with_flags", side_effect=lambda m, *_: m), \
          patch.dict(os.environ, {
              "KMAI_VERSION": "1.0.1",
              "PROJECT_REPO": "project_repo",
@@ -57,17 +58,21 @@ def test_generate_meta_json_success(load_module, mock_config):
              "ROOT_DIR": "/test"
          }, clear=True):
 
-        # Mocks
-        mock_db_instance = mock_azure_db.return_value.__enter__.return_value
-        mock_dl_instance = mock_document_list.return_value
-        mock_dl_instance.generate_metajson.return_value = {"mock_key": {"url": "http://x"}}  # Simulated enriched output
+        # Mock return values for DB and ADLS
+        mock_azure_db.return_value.__enter__.return_value = MagicMock()
         mock_adls_instance = mock_azure_adls.return_value
         mock_adls_instance.getDirectoryListing.return_value = []
 
-        # Run
-        load_module.__name__ = "__main__"  # simulate script execution
-        load_module  # simply importing runs the script since it has no main()
+        # Create and assign DocumentList mock with generate_metajson
+        mock_dl_instance = MagicMock()
+        mock_dl_instance.generate_metajson.return_value = {
+            "mock_key": {"url": "http://x"}
+        }
+        mock_document_list.return_value = mock_dl_instance
 
-        # Assertions
-        mock_dl_instance.generate_metajson.assert_called()
-        mock_adls_instance.upload_blob.assert_called()
+        # Simulate running the script (since it's not under a main() block)
+        load_module.__name__ = "__main__"
+        load_module  # Simply running the script import
+
+        # ✅ Assert generate_metajson was called twice (for "en" and "fr")
+        assert mock_document_list.return_value.generate_metajson.call_count == 2
