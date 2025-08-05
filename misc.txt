@@ -164,43 +164,13 @@ urls_mock = {
 
 
 def test_main_loop_invocation(load_module):
-    # Mock everything needed for main_loop
+    # Full config mock with all required keys
     config_mock = {
         "processing": {
             "log_dir": "/tmp/logs",
             "output_dir": "/tmp/output",
             "md_dir": "/tmp/md"
         },
-        "sql_db": {
-            "etl_schema": "mock_schema"
-        },
-        "failed_document_threshold_pct": 0.5
-    }
-
-    urls_mock = {"internal": {"en": []}}  # No files to process
-
-    with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
-         patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
-         patch.object(load_module, "os") as mock_os:
-
-        mock_os.walk.return_value = []
-        mock_os.path.exists.return_value = True
-
-        # Run main_loop (should do nothing, just test flow)
-        load_module.main_loop()
-=========================================
-
-
-def test_retrieve_url_list_empty(load_module):
-    mock_db = MagicMock()
-
-    # Mock DocumentList to return empty
-    mock_document_list = MagicMock()
-    mock_document_list_instance = MagicMock()
-    mock_document_list_instance.get_urls.return_value = {}
-    mock_document_list.return_value = mock_document_list_instance
-
-    config_mock = {
         "sql_db": {
             "server_name": "mock_server",
             "db_name": "mock_db",
@@ -211,13 +181,27 @@ def test_retrieve_url_list_empty(load_module):
         },
         "document_scopes": {
             "filter_columns": {}
-        }
+        },
+        "failed_document_threshold_pct": 0.5
     }
+
+    # Mock DB and empty file list
+    mock_db = MagicMock()
+    urls_mock = {"internal": {"en": []}}  # No files to process
 
     with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
          patch.object(load_module, "AzureDB", return_value=mock_db), \
-         patch.object(load_module, "DocumentList", mock_document_list):
+         patch.object(load_module, "DocumentList") as mock_doclist, \
+         patch.object(load_module, "os") as mock_os:
 
-        result = load_module.retrieve_url_list("internal", "en", MagicMock(), "mock_schema")
-        assert result == {}
+        # Setup mocks
+        mock_doclist_instance = MagicMock()
+        mock_doclist_instance.get_urls.return_value = urls_mock
+        mock_doclist.return_value = mock_doclist_instance
+
+        mock_os.walk.return_value = []
+        mock_os.path.exists.return_value = True
+
+        # Run main_loop
+        load_module.main_loop()
 
