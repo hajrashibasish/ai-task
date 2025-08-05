@@ -163,49 +163,62 @@ urls_mock = {
 ==========================
 
 
-def test_main_loop_invocation(load_module):
+def test_main_loop_success(load_module):
+    from unittest.mock import MagicMock, patch
+    import os
+
+    # Required configuration keys for your main script
     config_mock = {
-        "sql_db": {
-            "server_name": "mock_server",
-            "db_name": "mock_db",
-            "etl_schema": "mock_schema"
-        },
-        "credentials": {
-            "object_id": "mock_object_id"
-        },
-        "document_scopes": {
-            "classification": ["internal"]
-        },
         "processing": {
             "log_dir": "/tmp/logs",
             "output_dir": "/tmp/output",
             "md_dir": "/tmp/md"
         },
+        "sql_db": {
+            "server_name": "test_server",
+            "db_name": "test_db",
+            "etl_schema": "mock_schema"
+        },
+        "credentials": {"object_id": "mock_obj"},
+        "document_scopes": {
+            "internal": {
+                "languages": ["en"]
+            }
+        },
         "failed_document_threshold_pct": 0.5
     }
 
+    # Simulated return from retrieve_url_list
     urls_mock = {
         "internal": {
-            "en": []
+            "en": [
+                {
+                    "file": "file.unsupported",
+                    "status": "pending",
+                    "output_dir": "/tmp/output/internal/en",
+                    "language": "en",
+                    "doc_id": "mock_doc_001"
+                }
+            ]
         }
     }
 
+    os_walk_return = [
+        ("/tmp/output/internal/en", [], ["file.unsupported"])
+    ]
+
     with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
-         patch.object(load_module, "AzureDB", return_value=MagicMock()), \
-         patch.object(load_module, "DocumentList") as mock_doclist, \
          patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
          patch.object(load_module, "os") as mock_os:
 
-        mock_doclist_instance = MagicMock()
-        mock_doclist_instance.get_urls.return_value = urls_mock
-        mock_doclist.return_value = mock_doclist_instance
-
-        mock_os.walk.return_value = []
+        mock_os.walk.return_value = os_walk_return
         mock_os.path.exists.return_value = True
         mock_os.remove = MagicMock()
         mock_os.makedirs = MagicMock()
         mock_os.path.splitext = os.path.splitext
         mock_os.path.join = os.path.join
 
-        # 🔥 Run main_loop with everything properly mocked
-        load_module.main_loop()
+        result = load_module.main_loop()
+
+        assert result == {"file": {"status": "unsupported file type"}}
+
