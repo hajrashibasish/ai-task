@@ -2,3 +2,122 @@ docJson = json.loads(requests.get(docUrl).content)
 
 print(f"\n[API DEBUG] URL: {docUrl}")
 print(f"[API DEBUG] Raw JSON for doc_id={docId}, lang={language}:\n{json.dumps(docJson, indent=2)}")
+
+[API DEBUG] URL: https://w3.td.com/EIPAppIntegration/rest/eip/pageinfo?docid=WLTHDCR1524083830&locale=fr_ca&expired=false
+
+[API DEBUG] Raw JSON for doc_id=WLTHDCR1524083830, lang=fr:
+
+{
+
+  "heading": "Attributs de page",
+
+  "results": [
+
+    {
+
+      "value": "<a href=\http://tdteamsite.td.com/iw-cc/command/iw.ccpro.launch_edit_form?full_redirect=true&vpath=//*/default/main/Intranet-Portal/WORKAREA/common/templatedata/Portal-Content/Tabbed/data/Wealth/Wealth_Main/Financial_PlanningNon_Resident_Policy__fr_ca\ class=\"edit\" target=\"_blank\">WLTHDCR1524083830</a>",
+
+      "key": "Num&eacute;ro de r&eacute;f&eacute;rence :"
+
+    },
+
+    {
+
+      "value": Kevin.Hayes@td.com;Daniel.Ova@td.com;Leuangna.Bautista@td.com,
+
+      "key": "Propri&eacute;taire du contenu :"
+
+    },
+
+    {
+
+      "value": "Anonymous",
+
+      "key": "Groupes LDAP :"
+
+    },
+
+    {
+
+      "value": "Type de cat&eacute;gorie : Gestion de patrimoine<br><br>L1 : Planification financi\u00e8re",
+
+      "key": "Cat&eacute;gorie de contenu :"
+
+    },
+
+    {
+
+      "value": "Financial Planners Politique \u00e0 l\u2019\u00e9gard des non-r\u00e9sidents",
+
+      "key": "La description de recherch&eacute; :"
+
+    },
+
+    {
+
+      "value": "Financial Planners Politique \u00e0 l\u2019\u00e9gard des non-r\u00e9sidents",
+
+      "key": "Les mots-cl&eacute;s de recherch&eacute; :"
+
+    },
+
+    {
+
+      "value": "Intranet-Portal/templatedata/Portal-Content/Tabbed/data/Wealth/Wealth_Main/Financial_PlanningNon_Resident_Policy__fr_ca",
+
+      "key": "Emplacement de la source :"
+
+    },
+
+    {
+
+      "value": "Intranet-Portal/WORKAREA/common/templatedata/Portal-Content/Tabbed/data/Wealth/Wealth_Main/Financial_PlanningNon_Resident_Policy__fr_ca",
+
+      "key": "Chemin d'acc&egrave;s TeamSite :"
+
+    },
+
+    {
+
+      "value": "24 oct. 2018",
+
+      "key": "Cr&eacute;&eacute; :"
+
+    },
+
+    {
+
+      "value": "8 juil. 2025",
+
+      "key": "Derni&egrave;re mise &agrave; jour :"
+
+    },
+
+    {
+
+      "value": "24 nov. 2026",
+
+      "key": "Date d'expiration :"
+
+    }
+
+  ]
+
+}
+
+{'heading': 'Attributs de page', 'results': [{'value': '<a href=http://tdteamsite.td.com/iw-cc/command/iw.ccpro.launch_edit_form?full_redirect=true&vpath=//*/default/main/Intranet-Portal/WORKAREA/common/templatedata/Portal-Content/Tabbed/data/Wealth/Wealth_Main/Financial_PlanningNon_Resident_Policy__fr_ca class="edit" target="_blank">WLTHDCR1524083830</a>', 'key': 'Num&eacute;ro de r&eacute;f&eacute;rence :'}, {'value': 'Kevin.Hayes@td.com;Daniel.Ova@td.com;Leuangna.Bautista@td.com', 'key': 'Propri&eacute;taire du contenu :'}, {'value': 'Anonymous', 'key': 'Groupes LDAP :'}, {'value': 'Type de cat&eacute;gorie : Gestion de patrimoine<br><br>L1 : Planification financière', 'key': 'Cat&eacute;gorie de contenu :'}, {'value': 'Financial Planners Politique à l’égard des non-résidents', 'key': 'La description de recherch&eacute; :'}, {'value': 'Financial Planners Politique à l’égard des non-résidents', 'key': 'Les mots-cl&eacute;s de recherch&eacute; :'}, {'value': 'Intranet-Portal/templatedata/Portal-Content/Tabbed/data/Wealth/Wealth_Main/Financial_PlanningNon_Resident_Policy__fr_ca', 'key': 'Emplacement de la source :'}, {'value': 'Intranet-Portal/WORKAREA/common/templatedata/Portal-Content/Tabbed/data/Wealth/Wealth_Main/Financial_PlanningNon_Resident_Policy__fr_ca', 'key': "Chemin d'acc&egrave;s TeamSite :"}, {'value': '24 oct. 2018', 'key': 'Cr&eacute;&eacute; :'}, {'value': '8 juil. 2025', 'key': 'Derni&egrave;re mise &agrave; jour :'}, {'value': '24 nov. 2026', 'key': "Date d'expiration :"}]}
+
+| Field Name (your logic) | French Key to Use (verbatim)    |
+| ----------------------- | ------------------------------- |
+| `reference_number`      | `Numéro de référence :`         |
+| `content_owner`         | `Propriétaire du contenu :`     |
+| `ldap_groups`           | `Groupes LDAP :`                |
+| `category_type`         | `Catégorie de contenu :`        |
+| `search_description`    | `La description de recherché :` |
+| `search_keywords`       | `Les mots-clés de recherché :`  |
+| `source_location`       | `Emplacement de la source :`    |
+| `teamsite_path`         | `Chemin d'accès TeamSite :`     |
+| `created_date`          | `Créé :`                        |
+| `last_modified_date`    | `Dernière mise à jour :`        |
+| `expiration_date`       | `Date d'expiration :`           |
+
