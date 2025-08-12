@@ -1,150 +1,152 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 import json
-import os
-import logging
 from datetime import datetime
 
-from your_module import MetadataProcessing  # Adjust this import to your actual script name
+# Import your MetadataProcessing class here. Adjust the import path accordingly.
+# from your_module import MetadataProcessing
 
+class DummyDB:
+    def execute_update(self, sql, params):
+        # Dummy method to simulate DB update call
+        pass
 
 @pytest.fixture
 def load_module():
-    """Fixture to load MetadataProcessing class."""
+    """Fixture to instantiate MetadataProcessing."""
     return MetadataProcessing()
 
+def mock_requests_get(results):
+    """Helper to create a mocked requests.get returning specific JSON results."""
+    mock_response = MagicMock()
+    mock_response.content = json.dumps({"results": results}).encode('utf-8')
+    return mock_response
 
 def test_retrieve_page_metadata_en(load_module):
-    """Test the retrieve_page_metadata method for English metadata retrieval."""
     with patch("requests.get") as mock_get:
-        # Mocking the response for requests.get
-        mock_get.return_value.content = json.dumps({
-            "results": [
-                {"key": "Doc ID:", "value": "<span>12345</span>"},
-                {"key": "Content Category:", "value": "Category1"}
-            ])
+        mock_get.return_value = mock_requests_get([
+            {"key": "Doc ID:", "value": "<span>12345</span>"},
+            {"key": "Content Category:", "value": "Category1"}
+        ])
         
         result = load_module.retrieve_page_metadata(docId="12345", language="en")
         
-        # Check if Doc ID is correctly extracted
         assert result["results"][0]["value"] == "12345"
         assert result["results"][1]["value"] == "Category1"
         mock_get.assert_called_once()
 
-
-def test_save_metadata(load_module):
-    """Test saving metadata with different feed sources."""
-    with patch("requests.get") as mock_get:
-        mock_db = MagicMock()
-
-        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "success"}
+def test_save_metadata_manual_en(load_module):
+    with patch.object(load_module, "save_metadata_en") as mock_en, \
+         patch.object(load_module, "save_metadata_fr") as mock_fr:
         
-        # Mock retrieve_page_metadata for English language
-        mock_get.return_value.content = json.dumps({
-            "results": [
-                {"key": "Content Category:", "value": "Category1"},
-                {"key": "Content Owner:", "value": "Owner1"}
-            ]})
+        mock_db = DummyDB()
+        file_info = {"feed_source": "manual"}
         
-        # Test for 'manual' feed source
-        load_module.save_metadata(url="https://example.com", language="en", doc_id="12345", title="Test Title",
-                                   file_info=file_info, db=mock_db, etl_schema="etl")
-        mock_db.execute_update.assert_called_once()
+        # English call
+        load_module.save_metadata(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema=None)
+        mock_en.assert_called_once()
+        mock_fr.assert_not_called()
+
+def test_save_metadata_manual_fr(load_module):
+    with patch.object(load_module, "save_metadata_en") as mock_en, \
+         patch.object(load_module, "save_metadata_fr") as mock_fr:
         
-        # Test for 'xml' feed source
-        file_info['feed_source'] = "xml"
-        load_module.save_metadata(url="https://example.com", language="fr", doc_id="54321", title="Test Title",
-                                   file_info=file_info, db=mock_db, etl_schema="etl")
-        mock_db.execute_update.assert_called()
-
-
-def test_save_metadata_feed(load_module):
-    """Test saving metadata feed."""
-    with patch("requests.get") as mock_get:
-        mock_db = MagicMock()
+        mock_db = DummyDB()
+        file_info = {"feed_source": "manual"}
         
-        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "success"}
-        
-        # Mock retrieve_page_metadata for English language
-        mock_get.return_value.content = json.dumps({
-            "results": [
-                {"key": "Content Category:", "value": "Category1"},
-                {"key": "Content Owner:", "value": "Owner1"}
-            ]})
-        
-        # Test saving metadata feed
-        load_module.save_metadata_feed(url="https://example.com", language="en", doc_id="12345", title="Test Title",
-                                       file_info=file_info, db=mock_db, etl_schema="etl", filename_key="mock_filename",
-                                       doc_md_document_id="mock_doc_id")
-        mock_db.execute_update.assert_called_once()
+        # French call
+        load_module.save_metadata(url="url", language="fr", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema=None)
+        mock_fr.assert_called_once()
+        mock_en.assert_not_called()
 
+def test_save_metadata_xml_calls_feed_method(load_module):
+    with patch.object(load_module, "save_metadata_feed") as mock_feed:
+        mock_db = DummyDB()
+        file_info = {"feed_source": "xml"}
+        load_module.save_metadata(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema=None)
+        mock_feed.assert_called_once()
 
-def test_save_metadata_fr(load_module):
-    """Test saving metadata in French with successful metadata retrieval."""
-    with patch("locale.setlocale") as mock_setlocale, patch("requests.get") as mock_get:
-        mock_db = MagicMock()
+@patch("requests.get")
+def test_save_metadata_feed_success(mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([
+        {"key": "Content Category:", "value": "Category1"},
+        {"key": "Content Owner:", "value": "Owner1"},
+        {"key": "Last Edited By:", "value": "Editor1"},
+    ])
 
-        # Mock retrieve_page_metadata for French language
-        mock_get.return_value.content = json.dumps({
-            "results": [
-                {"key": "Cat&eacute;gorie de contenu :", "value": "Catégorie1"},
-                {"key": "Propriétaire du contenu :", "value": "Owner1"}
-            ]})
+    file_info = {"path": "/path/file", "sha256_hash": "hash", "status": "success", "type": "text"}
+    load_module.save_metadata_feed(url="https://example.com", language="en", doc_id="docid", title="title",
+                                   file_info=file_info, db=mock_db, etl_schema="etl",
+                                   filename_key="filename_key", doc_md_document_id="doc_md_document_id")
+    mock_db.execute_update.assert_called_once()
 
-        # Test save_metadata_fr method
-        load_module.save_metadata_fr(url="https://example.com", language="fr", doc_id="12345", title="Test Title",
-                                      file_info={"path": "/path/to/file.txt", "type": "text"}, db=mock_db, etl_schema="etl")
-        mock_db.execute_update.assert_called_once()
+@patch("requests.get")
+def test_save_metadata_feed_failure(mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([])  # empty results
+    
+    file_info = {"path": "/path/file", "sha256_hash": "hash", "status": "failed", "message": "error"}
+    load_module.save_metadata_feed(url="https://example.com", language="en", doc_id="docid", title="title",
+                                   file_info=file_info, db=mock_db, etl_schema="etl",
+                                   filename_key="filename_key", doc_md_document_id="doc_md_document_id")
+    mock_db.execute_update.assert_called_once()
 
+@patch("requests.get")
+@patch("locale.setlocale")
+def test_save_metadata_fr_text(mock_setlocale, mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([
+        {"key": "Cat&eacute;gorie de contenu :", "value": "Catégorie1"},
+        {"key": "Propri&eacute;taire du contenu :", "value": "Owner1"},
+    ])
+
+    file_info = {"path": "/path/file.txt", "type": "text"}
+    load_module.save_metadata_fr(url="url", language="fr", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+    mock_db.execute_update.assert_called_once()
+
+@patch("requests.get")
+@patch("locale.setlocale")
+def test_save_metadata_fr_binary(mock_setlocale, mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([])  # empty results
+
+    file_info = {"path": "/path/file.pdf", "type": "binary"}
+    load_module.save_metadata_fr(url="url", language="fr", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+    mock_db.execute_update.assert_called_once()
+
+@patch("requests.get")
+def test_save_metadata_en_text(mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([
+        {"key": "Content Category:", "value": "Cat1"},
+        {"key": "Content Owner:", "value": "Owner1"},
+        {"key": "Last Edited By:", "value": "Editor1"},
+        {"key": "Last Updated:", "value": "Jan 01, 2023"},
+        {"key": "Expiration Date:", "value": "Dec 31, 2023"},
+    ])
+
+    file_info = {"path": "/path/file.txt", "type": "text", "status": "success"}
+    load_module.save_metadata_en(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+    mock_db.execute_update.assert_called_once()
+
+@patch("requests.get")
+def test_save_metadata_en_binary(mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([
+        {"key": "Content Category:", "value": "Cat1"},
+        {"key": "Content Owner:", "value": "Owner1"},
+        {"key": "Last Edited By:", "value": "Editor1"},
+        {"key": "Last Updated:", "value": "Jan 01, 2023"},
+        {"key": "Expiration Date:", "value": "Dec 31, 2023"},
+    ])
+
+    file_info = {"path": "/path/file.pdf", "type": "binary", "status": "success"}
+    load_module.save_metadata_en(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+    mock_db.execute_update.assert_called_once()
 
 def test_set_failure(load_module):
-    """Test failure handling when metadata retrieval fails."""
-    with patch("requests.get") as mock_get, patch("locale.setlocale") as mock_setlocale:
-        mock_db = MagicMock()
-
-        # Simulate failure (empty metadata)
-        mock_get.return_value.content = json.dumps({"results": []})
-
-        file_info = {"path": "/path/to/file.txt", "message": "Error"}
-        
-        # Test setting failure on metadata retrieval
-        load_module.set_failure(url="https://example.com", language="en", doc_id="12345", title="Test Title",
-                                file_info=file_info, db=mock_db, etl_schema="etl", failed_retries=3)
-        mock_db.execute_update.assert_called_once()
-
-
-def test_save_metadata_en(load_module):
-    """Test saving metadata for English pages."""
-    with patch("requests.get") as mock_get:
-        mock_db = MagicMock()
-
-        # Mock metadata retrieval
-        mock_get.return_value.content = json.dumps({
-            "results": [
-                {"key": "Content Category:", "value": "Category1"},
-                {"key": "Content Owner:", "value": "Owner1"}
-            ]})
-
-        # Test save_metadata_en method
-        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "success"}
-        load_module.save_metadata_en(url="https://example.com", language="en", doc_id="12345", title="Test Title",
-                                      file_info=file_info, db=mock_db, etl_schema="etl")
-        mock_db.execute_update.assert_called_once()
-
-
-def test_save_metadata_en_failure(load_module):
-    """Test failure in saving metadata for English pages."""
-    with patch("requests.get") as mock_get:
-        mock_db = MagicMock()
-
-        # Simulate failed metadata retrieval (empty result)
-        mock_get.return_value.content = json.dumps({"results": []})
-
-        # Test saving metadata failure
-        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "failed"}
-        load_module.save_metadata_en(url="https://example.com", language="en", doc_id="12345", title="Test Title",
-                                      file_info=file_info, db=mock_db, etl_schema="etl")
-        mock_db.execute_update.assert_called_once()
-
-
-# Add more tests for additional coverage, especially for edge cases
+    mock_db = MagicMock()
+    file_info = {"message": "Error message"}
+    load_module.set_failure(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+    mock_db.execute_update.assert_called_once()
