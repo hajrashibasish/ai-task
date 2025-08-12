@@ -1,237 +1,150 @@
-def main_loop():
-    config = WGPT.Utilities.read_config()
-    server_name = config["sql_db"]["server_name"]
-    db_name = config["sql_db"]["db_name"]
-    object_id = config["credentials"]["object_id"]
-    etl_schema = config["sql_db"]["etl_schema"]
-    log_dir = config["processing"]["log_dir"]
-    document_scopes = config['document_scopes']
-
-    # Mute Azure info logging; only show when there is an error
-    azure_loggers = [
-        "azure.identity._credentials.managed_identity",
-        "azure.core.pipeline.policies.http_logging_policy",
-        "azure.identity._internal.msal_managed_identity_client",
-        "azure.identity._internal.decorators"
-    ]
-    for azl in azure_loggers:
-        azlogger = logging.getLogger(azl)
-        azlogger.setLevel(logging.ERROR)
-
-    logging.basicConfig(filename=f"{log_file_path}",
-                        format="%(levelname)s:%(asctime)s:[DownloadFiles] %(message)s", level=logging.INFO)
-    logger = logging.getLogger()
-
-    with AzureDB(server_name=server_name, db_name=db_name, uid=object_id) as db_read:
-        for classification in document_scopes.get("classification"):
-            for language in document_scopes.get("language"):
-                download_files(classification, language, db_read)
-
-
-if __name__ == "__main__":
-    main_loop()
-
-
-# =========================================
-# EXTRA TESTS TO IMPROVE COVERAGE
-# =========================================
-
-import importlib.util
-import os
+import pytest
+from unittest.mock import MagicMock, patch
 import json
-from unittest.mock import patch, MagicMock, mock_open
+import os
+import logging
+from datetime import datetime
 
-# Reuse the dynamic loader pattern you already use
-def _load_module():
-    module_path = os.path.join(os.path.dirname(__file__), "../../bin/01_downloadfiles.py")
-    spec = importlib.util.spec_from_file_location("downloadfiles", module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from your_module import MetadataProcessing  # Adjust this import to your actual script name
 
 
-# -----------------------------------------
-# main_loop(): calls download for each scope
-# -----------------------------------------
-def test_main_loop_invokes_download_for_each_scope(tmp_path):
-    mod = _load_module()
-
-    fake_cfg = {
-        "sql_db": {"server_name": "s", "db_name": "d", "etl_schema": "etl"},
-        "credentials": {"object_id": "oid"},
-        "processing": {"log_dir": str(tmp_path / "logs"), "output_dir": str(tmp_path / "out")},
-        "document_scopes": {"classification": ["internal", "public"], "language": ["en", "fr"]},
-        "max_url_retries": 2,
-    }
-
-    # Dummy AzureDB that acts like a context manager
-    class DummyAzureDB:
-        def __init__(self, server_name=None, db_name=None, uid=None):
-            pass
-        def __enter__(self): return MagicMock()
-        def __exit__(self, exc_type, exc, tb): return False
-
-    with patch.object(mod.WGPT.Utilities, "read_config", return_value=fake_cfg), \
-         patch.object(mod, "AzureDB", DummyAzureDB), \
-         patch.object(mod, "download_files") as mock_download, \
-         patch("logging.getLogger") as _:
-        # Ensure log dir exists (your script writes to it)
-        os.makedirs(fake_cfg["processing"]["log_dir"], exist_ok=True)
-
-        mod.main_loop()
-
-        # 2 classifications * 2 languages = 4 calls
-        assert mock_download.call_count == 4
-        # sanity: check first call args tuple shape
-        first_args, first_kwargs = mock_download.call_args
-        assert len(first_args) == 3  # classification, language, db_read
-        assert first_kwargs == {}
+@pytest.fixture
+def load_module():
+    """Fixture to load MetadataProcessing class."""
+    return MetadataProcessing()
 
 
-# --------------------------------------------------------
-# main_loop(): handles empty scopes without blowing up
-# --------------------------------------------------------
-def test_main_loop_handles_empty_scopes(tmp_path):
-    mod = _load_module()
-
-    fake_cfg = {
-        "sql_db": {"server_name": "s", "db_name": "d", "etl_schema": "etl"},
-        "credentials": {"object_id": "oid"},
-        "processing": {"log_dir": str(tmp_path / "logs"), "output_dir": str(tmp_path / "out")},
-        "document_scopes": {"classification": [], "language": []},
-        "max_url_retries": 2,
-    }
-
-    class DummyAzureDB:
-        def __init__(self, server_name=None, db_name=None, uid=None): pass
-        def __enter__(self): return MagicMock()
-        def __exit__(self, exc_type, exc, tb): return False
-
-    with patch.object(mod.WGPT.Utilities, "read_config", return_value=fake_cfg), \
-         patch.object(mod, "AzureDB", DummyAzureDB), \
-         patch.object(mod, "download_files") as mock_download, \
-         patch("logging.getLogger") as _:
-        os.makedirs(fake_cfg["processing"]["log_dir"], exist_ok=True)
-        mod.main_loop()
-        mock_download.assert_not_called()
+def test_retrieve_page_metadata_en(load_module):
+    """Test the retrieve_page_metadata method for English metadata retrieval."""
+    with patch("requests.get") as mock_get:
+        # Mocking the response for requests.get
+        mock_get.return_value.content = json.dumps({
+            "results": [
+                {"key": "Doc ID:", "value": "<span>12345</span>"},
+                {"key": "Content Category:", "value": "Category1"}
+            ])
+        
+        result = load_module.retrieve_page_metadata(docId="12345", language="en")
+        
+        # Check if Doc ID is correctly extracted
+        assert result["results"][0]["value"] == "12345"
+        assert result["results"][1]["value"] == "Category1"
+        mock_get.assert_called_once()
 
 
-# -------------------------------------------------------------------------
-# download_files(): exercises PPT, XLSX, and NON-XLSX (HTML) code paths
-# -------------------------------------------------------------------------
-def test_download_files_dispatches_types_and_saves_meta(tmp_path):
-    mod = _load_module()
+def test_save_metadata(load_module):
+    """Test saving metadata with different feed sources."""
+    with patch("requests.get") as mock_get:
+        mock_db = MagicMock()
 
-    # Make sure output/log dirs exist
-    outdir = tmp_path / "out"
-    logdir = tmp_path / "logs"
-    os.makedirs(outdir, exist_ok=True)
-    os.makedirs(logdir, exist_ok=True)
-
-    fake_cfg = {
-        "sql_db": {"etl_schema": "etl"},
-        "processing": {"output_dir": str(outdir), "log_dir": str(logdir)},
-        "max_url_retries": 2,
-    }
-
-    # URL fixtures
-    url_ppt  = "https://w3.td.com/x/files?p=1&DOCID=DOCPPT123"
-    url_xlsx = "https://w3.td.com/x/report.xlsx"
-    url_html = "https://w3.td.com/x/page.html"
-
-    # Simulate get_urls returning one PPTX, one XLSX, one HTML for "internal/en"
-    url_tree = {
-        "internal": {
-            "en": {
-                url_ppt:  {"doc_type": "pptx", "doc_id": "DOCPPT123"},
-                url_xlsx: {"doc_type": "xlsx", "doc_id": "DOCXLSX456"},
-                url_html: {"doc_type": "html", "doc_id": "DOCHTML789"},
-            }
-        }
-    }
-
-    # Fake DocumentRetrieval.retrieve result for the non-xlsx (html) branch
-    dr_result = {
-        url_html: {
-            "path": str(outdir / "internal" / "en" / "DOCHTML789.html"),
-            "type": "text",
-            "status": "success",
-            "doc_id": "DOCHTML789",
-        }
-    }
-
-    # Mocks we’ll need
-    with patch.object(mod.WGPT.Utilities, "read_config", return_value=fake_cfg), \
-         patch.object(mod, "DocumentList") as MockDocList, \
-         patch.object(mod, "process_ppt_entry") as mock_ppt, \
-         patch.object(mod, "process_xlsx_entry") as mock_xlsx, \
-         patch.object(mod.DocumentRetrieval, "retrieve", return_value=dr_result) as mock_retrieve, \
-         patch.object(mod.WGPT.MetadataProcessing, "save_metadata") as mock_save_meta, \
-         patch("os.makedirs") as _mk, \
-         patch("builtins.open", mock_open(read_data="{}")), \
-         patch("json.load", return_value={}), \
-         patch("json.dump") as _dump:
-
-        # get_urls will be called twice in download_files (ppt pass + normal pass)
-        MockDocList.return_value.get_urls.return_value = url_tree
-
-        # run
-        mod.download_files("internal", "en", db_read=MagicMock(), url=None)
-
-        # PPT & XLSX processors hit
-        mock_ppt.assert_called_once()
-        mock_xlsx.assert_called_once()
-
-        # Non-XLSX branch triggers DocumentRetrieval and then save_metadata
-        mock_retrieve.assert_called_once()
-        mock_save_meta.assert_called_once()
-
-        # A meta file should have been written (json.dump used)
-        assert _dump.call_count >= 1
+        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "success"}
+        
+        # Mock retrieve_page_metadata for English language
+        mock_get.return_value.content = json.dumps({
+            "results": [
+                {"key": "Content Category:", "value": "Category1"},
+                {"key": "Content Owner:", "value": "Owner1"}
+            ]})
+        
+        # Test for 'manual' feed source
+        load_module.save_metadata(url="https://example.com", language="en", doc_id="12345", title="Test Title",
+                                   file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+        
+        # Test for 'xml' feed source
+        file_info['feed_source'] = "xml"
+        load_module.save_metadata(url="https://example.com", language="fr", doc_id="54321", title="Test Title",
+                                   file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called()
 
 
-# -------------------------------------------------------------------------
-# retrieve_url_list(): DOCID regex extraction is case-insensitive & robust
-# -------------------------------------------------------------------------
-def test_retrieve_url_list_extracts_docid_case_insensitive():
-    mod = _load_module()
-    tricky_url = "https://w3.td.com/x?doCid=abc123&foo=bar"
-    url_tree = {"internal": {"en": {tricky_url: {"doc_type": "ppt"}}}}
-
-    with patch.object(mod, "DocumentList") as MockDocList:
-        MockDocList.return_value.get_urls.return_value = url_tree
-        result = mod.retrieve_url_list("internal", "en", MagicMock(), MagicMock(), None, "etl", {})
-        doc_id = result["internal"]["en"][tricky_url]["doc_id"]
-        assert doc_id == "ABC123"  # uppercase + extracted
-
-
-# -------------------------------------------------------------------------
-# download_files(): gracefully handles no URLs (nothing blows up)
-# -------------------------------------------------------------------------
-def test_download_files_with_no_urls_is_noop(tmp_path):
-    mod = _load_module()
-
-    fake_cfg = {
-        "sql_db": {"etl_schema": "etl"},
-        "processing": {"output_dir": str(tmp_path / "out"), "log_dir": str(tmp_path / "logs")},
-        "max_url_retries": 2,
-    }
-
-    with patch.object(mod.WGPT.Utilities, "read_config", return_value=fake_cfg), \
-         patch.object(mod, "DocumentList") as MockDocList, \
-         patch.object(mod, "process_ppt_entry") as mock_ppt, \
-         patch.object(mod, "process_xlsx_entry") as mock_xlsx, \
-         patch.object(mod.DocumentRetrieval, "retrieve") as mock_retrieve, \
-         patch("os.makedirs"):
-
-        MockDocList.return_value.get_urls.return_value = {}  # no URLs
-        mod.download_files("internal", "en", db_read=MagicMock())
-
-        mock_ppt.assert_not_called()
-        mock_xlsx.assert_not_called()
-        mock_retrieve.assert_not_called()
+def test_save_metadata_feed(load_module):
+    """Test saving metadata feed."""
+    with patch("requests.get") as mock_get:
+        mock_db = MagicMock()
+        
+        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "success"}
+        
+        # Mock retrieve_page_metadata for English language
+        mock_get.return_value.content = json.dumps({
+            "results": [
+                {"key": "Content Category:", "value": "Category1"},
+                {"key": "Content Owner:", "value": "Owner1"}
+            ]})
+        
+        # Test saving metadata feed
+        load_module.save_metadata_feed(url="https://example.com", language="en", doc_id="12345", title="Test Title",
+                                       file_info=file_info, db=mock_db, etl_schema="etl", filename_key="mock_filename",
+                                       doc_md_document_id="mock_doc_id")
+        mock_db.execute_update.assert_called_once()
 
 
+def test_save_metadata_fr(load_module):
+    """Test saving metadata in French with successful metadata retrieval."""
+    with patch("locale.setlocale") as mock_setlocale, patch("requests.get") as mock_get:
+        mock_db = MagicMock()
+
+        # Mock retrieve_page_metadata for French language
+        mock_get.return_value.content = json.dumps({
+            "results": [
+                {"key": "Cat&eacute;gorie de contenu :", "value": "Catégorie1"},
+                {"key": "Propriétaire du contenu :", "value": "Owner1"}
+            ]})
+
+        # Test save_metadata_fr method
+        load_module.save_metadata_fr(url="https://example.com", language="fr", doc_id="12345", title="Test Title",
+                                      file_info={"path": "/path/to/file.txt", "type": "text"}, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
 
 
+def test_set_failure(load_module):
+    """Test failure handling when metadata retrieval fails."""
+    with patch("requests.get") as mock_get, patch("locale.setlocale") as mock_setlocale:
+        mock_db = MagicMock()
 
+        # Simulate failure (empty metadata)
+        mock_get.return_value.content = json.dumps({"results": []})
+
+        file_info = {"path": "/path/to/file.txt", "message": "Error"}
+        
+        # Test setting failure on metadata retrieval
+        load_module.set_failure(url="https://example.com", language="en", doc_id="12345", title="Test Title",
+                                file_info=file_info, db=mock_db, etl_schema="etl", failed_retries=3)
+        mock_db.execute_update.assert_called_once()
+
+
+def test_save_metadata_en(load_module):
+    """Test saving metadata for English pages."""
+    with patch("requests.get") as mock_get:
+        mock_db = MagicMock()
+
+        # Mock metadata retrieval
+        mock_get.return_value.content = json.dumps({
+            "results": [
+                {"key": "Content Category:", "value": "Category1"},
+                {"key": "Content Owner:", "value": "Owner1"}
+            ]})
+
+        # Test save_metadata_en method
+        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "success"}
+        load_module.save_metadata_en(url="https://example.com", language="en", doc_id="12345", title="Test Title",
+                                      file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+
+
+def test_save_metadata_en_failure(load_module):
+    """Test failure in saving metadata for English pages."""
+    with patch("requests.get") as mock_get:
+        mock_db = MagicMock()
+
+        # Simulate failed metadata retrieval (empty result)
+        mock_get.return_value.content = json.dumps({"results": []})
+
+        # Test saving metadata failure
+        file_info = {"path": "/path/to/file.txt", "sha256_hash": "mock_hash", "status": "failed"}
+        load_module.save_metadata_en(url="https://example.com", language="en", doc_id="12345", title="Test Title",
+                                      file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+
+
+# Add more tests for additional coverage, especially for edge cases
