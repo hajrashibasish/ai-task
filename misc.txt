@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 import json
 from datetime import datetime
 
-# Adjust sys.path to import your main script
+# Adjust path so Python can import the main script (metadata_processing.py)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../bin")))
 
 from metadata_processing import MetadataProcessing
