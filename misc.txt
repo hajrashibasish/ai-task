@@ -1,15 +1,15 @@
+import sys
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 import json
 from datetime import datetime
 
-# Import your MetadataProcessing class here. Adjust the import path accordingly.
-# from your_module import MetadataProcessing
+# Adjust sys.path to import your main script
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../bin")))
 
-class DummyDB:
-    def execute_update(self, sql, params):
-        # Dummy method to simulate DB update call
-        pass
+from metadata_processing import MetadataProcessing
+
 
 @pytest.fixture
 def load_module():
@@ -39,10 +39,9 @@ def test_save_metadata_manual_en(load_module):
     with patch.object(load_module, "save_metadata_en") as mock_en, \
          patch.object(load_module, "save_metadata_fr") as mock_fr:
         
-        mock_db = DummyDB()
+        mock_db = MagicMock()
         file_info = {"feed_source": "manual"}
         
-        # English call
         load_module.save_metadata(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema=None)
         mock_en.assert_called_once()
         mock_fr.assert_not_called()
@@ -51,17 +50,16 @@ def test_save_metadata_manual_fr(load_module):
     with patch.object(load_module, "save_metadata_en") as mock_en, \
          patch.object(load_module, "save_metadata_fr") as mock_fr:
         
-        mock_db = DummyDB()
+        mock_db = MagicMock()
         file_info = {"feed_source": "manual"}
         
-        # French call
         load_module.save_metadata(url="url", language="fr", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema=None)
         mock_fr.assert_called_once()
         mock_en.assert_not_called()
 
 def test_save_metadata_xml_calls_feed_method(load_module):
     with patch.object(load_module, "save_metadata_feed") as mock_feed:
-        mock_db = DummyDB()
+        mock_db = MagicMock()
         file_info = {"feed_source": "xml"}
         load_module.save_metadata(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema=None)
         mock_feed.assert_called_once()
