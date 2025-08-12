@@ -1,16 +1,15 @@
-import sys
-import os
+@patch('WGPT.metadata_processing.requests.get')
+def test_retrieve_page_metadata_en(mock_get, load_module):
+    # Mock the response content for requests.get
+    mock_get.return_value.content = json.dumps([
+        {"key": "Doc ID:", "value": "<span>12345</span>"},
+        {"key": "Content Category:", "value": "Category1"}
+    ]).encode('utf-8')
 
-print("Current test file dir:", os.path.dirname(__file__))
-print("sys.path before append:", sys.path)
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../bin")))
-
-print("sys.path after append:", sys.path)
-
-try:
-    from metadata_processing import MetadataProcessing
-    print("Import success")
-except ImportError as e:
-    print("Import failed:", e)
-    raise
+    # Call the method with parameters
+    result = load_module.retrieve_page_metadata(docId="12345", language="en")
+    
+    # Assert results (customize as per your expected output)
+    assert result is not None
+    assert isinstance(result, list)
+    assert result[0]["key"] == "Doc ID:"
