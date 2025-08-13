@@ -1,17 +1,14 @@
 #!/bin/bash
 
-echo "Erasing previous coverage data..."
-coverage erase
+LOGFILE="coverage_diagnostic_$(date +%Y%m%d_%H%M%S).log"
 
-echo "Running tests with coverage collection..."
-coverage run -m pytest -vv
+echo "=== Erasing previous coverage data ===" | tee $LOGFILE
+coverage erase 2>&1 | tee -a $LOGFILE
 
-echo "Generating coverage report with missing lines..."
-coverage report -m > coverage_report.txt 2>&1
+echo "=== Running tests with coverage on 'bin' folder ===" | tee -a $LOGFILE
+coverage run --source=bin -m pytest -vv tests/test_bin/ 2>&1 | tee -a $LOGFILE
 
-echo "Running pytest test collection only..."
-pytest --collect-only -q > pytest_collect.txt 2>&1
+echo "=== Generating coverage report ===" | tee -a $LOGFILE
+coverage report -m 2>&1 | tee -a $LOGFILE
 
-echo "Done. Reports generated:"
-echo " - coverage_report.txt"
-echo " - pytest_collect.txt"
+echo "Diagnostic complete. Output saved to $LOGFILE"
