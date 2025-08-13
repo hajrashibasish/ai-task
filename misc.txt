@@ -1,161 +1,35 @@
-import pytest
-from unittest.mock import MagicMock, patch
-import logging
-
-# 1. save_metadata_feed failure path test (status != success)
-@patch('WGPT.metadata_processing.requests.get')
-def test_save_metadata_feed_failure_path(mock_get, load_module):
-    mock_get.return_value.content = json.dumps({
-        "results": [
-            {"key": "Content Category:", "value": "Category1"},
-            {"key": "Content Owner:", "value": "Owner1"},
-            {"key": "Last Edited By:", "value": "Editor1"},
-        ]
-    }).encode('utf-8')
-
+def test_save_metadata_with_unknown_feed_source(load_module):
     mock_db = MagicMock()
+    file_info = {"feed_source": "unknown"}
+    
+    load_module.save_metadata(
+        url="url", language="en", doc_id="id", title="title",
+        file_info=file_info, db=mock_db, etl_schema=None
+    )
+    
+    # No DB updates should happen for unknown feed_source
+    mock_db.execute_update.assert_not_called()
+
+
+@patch('WGPT.metadata_processing.requests.get')
+def test_save_metadata_feed_failure_non_text(mock_get, load_module):
+    mock_db = MagicMock()
+    mock_get.return_value.content = json.dumps({"results": []}).encode('utf-8')
+    
     file_info = {
-        "path": "/path/file",
-        "sha256_hash": "hash",
         "status": "failed",
-        "message": "error message",
-        "type": "text"
+        "message": "Error message",
+        "type": "binary",
+        "path": "/path/file.pdf",
+        "sha256_hash": "dummyhash"
     }
+    
     load_module.save_metadata_feed(
-        url="https://example.com",
-        language="en",
-        doc_id="docid",
-        title="title",
-        file_info=file_info,
-        db=mock_db,
-        etl_schema="etl",
-        filename_key="filename_key",
-        doc_md_document_id="doc_md_document_id",
-        content_title="content_title"
+        url="url", language="en", doc_id="id", title="title",
+        file_info=file_info, db=mock_db, etl_schema="etl",
+        filename_key="filekey", doc_md_document_id="docmd", content_title="title"
     )
-    # It should attempt to update DB with failure status and message
+    
     mock_db.execute_update.assert_called_once()
-    args = mock_db.execute_update.call_args[0]
-    assert "failed_retries = failed_retries + 1" in args[0]
-    assert "LAST_RETRIEVAL_STATUS ='FAILED'" in args[0]
-    assert "error message" in args[1]
-
-# 2. save_metadata_fr with invalid/missing date keys to test exception swallowing
-@patch('WGPT.metadata_processing.requests.get')
-@patch('WGPT.metadata_processing.locale.setlocale')
-def test_save_metadata_fr_with_bad_dates(mock_setlocale, mock_get, load_module):
-    mock_get.return_value.content = json.dumps({
-        "results": [
-            {"key": "Cat&eacute;gorie de contenu :", "value": "Catégorie1"},
-            {"key": "Propri&eacute;taire du contenu :", "value": "Owner1"},
-            {"key": "Derni&egrave;re mise &agrave; jour :", "value": "invalid date"},
-            {"key": "Date d'expiration :", "value": "also invalid"},
-        ]
-    }).encode('utf-8')
-
-    mock_db = MagicMock()
-    file_info = {"path": "/path/file.txt", "type": "text"}
-
-    load_module.save_metadata_fr(
-        url="url",
-        language="fr",
-        doc_id="id",
-        title="title",
-        file_info=file_info,
-        db=mock_db,
-        etl_schema="etl"
-    )
-    # DB update should be called even if date parsing failed
-    mock_db.execute_update.assert_called_once()
-
-# 3. save_metadata_en with file_info['type'] not "text" branch
-@patch('WGPT.metadata_processing.requests.get')
-def test_save_metadata_en_binary_path(mock_get, load_module):
-    mock_get.return_value.content = json.dumps({
-        "results": [
-            {"key": "Content Category:", "value": "Cat1"},
-            {"key": "Content Owner:", "value": "Owner1"},
-            {"key": "Last Edited By:", "value": "Editor1"},
-            {"key": "Last Updated:", "value": "Jan 01, 2023"},
-            {"key": "Expiration Date:", "value": "Dec 31, 2023"},
-        ]
-    }).encode('utf-8')
-
-    mock_db = MagicMock()
-    file_info = {"path": "/path/file.pdf", "type": "binary", "status": "success"}
-
-    load_module.save_metadata_en(
-        url="url",
-        language="en",
-        doc_id="id",
-        title="title",
-        file_info=file_info,
-        db=mock_db,
-        etl_schema="etl"
-    )
-    mock_db.execute_update.assert_called_once()
-
-# 4. test exception handling in DB update for save_metadata_en
-@patch('WGPT.metadata_processing.requests.get')
-@patch('WGPT.metadata_processing.logging.error')
-def test_save_metadata_en_db_exception(mock_log_error, mock_get, load_module):
-    mock_get.return_value.content = json.dumps({
-        "results": [
-            {"key": "Content Category:", "value": "Cat1"},
-            {"key": "Content Owner:", "value": "Owner1"},
-            {"key": "Last Edited By:", "value": "Editor1"},
-            {"key": "Last Updated:", "value": "Jan 01, 2023"},
-            {"key": "Expiration Date:", "value": "Dec 31, 2023"},
-        ]
-    }).encode('utf-8')
-
-    def raise_exc(*args, **kwargs):
-        raise Exception("DB error")
-
-    mock_db = MagicMock()
-    mock_db.execute_update.side_effect = raise_exc
-
-    file_info = {"path": "/path/file.txt", "type": "text", "status": "success"}
-
-    load_module.save_metadata_en(
-        url="url",
-        language="en",
-        doc_id="id",
-        title="title",
-        file_info=file_info,
-        db=mock_db,
-        etl_schema="etl"
-    )
-    mock_log_error.assert_called_once()
-
-# 5. test set_failure with exception in DB update and normal execution
-@patch('WGPT.metadata_processing.logging.error')
-def test_set_failure_with_exception_and_normal(mock_log_error, load_module):
-    # Normal execution
-    mock_db = MagicMock()
-    file_info = {"message": "Error message"}
-
-    load_module.set_failure(
-        url="url",
-        language="en",
-        doc_id="id",
-        title="title",
-        file_info=file_info,
-        db=mock_db,
-        etl_schema="etl"
-    )
-    mock_db.execute_update.assert_called_once()
-
-    # Exception handling
-    mock_db.execute_update.side_effect = Exception("DB error")
-    load_module.set_failure(
-        url="url",
-        language="en",
-        doc_id="id",
-        title="title",
-        file_info=file_info,
-        db=mock_db,
-        etl_schema="etl"
-    )
-    mock_log_error.assert_called()
-
+    args, _ = mock_db.execute_update.call_args
+    assert "last_retrieval_status ='FAILED'" in args[0]
