@@ -1,20 +1,78 @@
 @patch('WGPT.metadata_processing.requests.get')
-def test_save_metadata_manual_en(mock_get, load_module):
+def test_save_metadata_manual_fr_fixed(mock_requests_get, load_module):
+    mock_requests_get.return_value.content = json.dumps({
+        "results": [
+            {"key": "Doc ID:", "value": "<span>12345</span>"},
+            {"key": "Content Category:", "value": "Category1"}
+        ]
+    }).encode('utf-8')
+
+    with patch.object(load_module, "save_metadata_en") as mock_en, \
+         patch.object(load_module, "save_metadata_fr") as mock_fr:
+
+        mock_db = MagicMock()
+        file_info = {"feed_source": "manual", "type": "text"}
+
+        load_module.save_metadata(url="url", language="fr", doc_id="id", title="title",
+                                  file_info=file_info, db=mock_db, etl_schema=None)
+
+        mock_fr.assert_called_once()
+        mock_en.assert_not_called()
+
+def test_save_metadata_xml_calls_feed_method_fixed(load_module):
+    with patch.object(load_module, "save_metadata_feed", autospec=True) as mock_feed:
+        mock_db = MagicMock()
+        file_info = {"feed_source": "xml", "type": "text"}
+
+        load_module.save_metadata(url="url", language="en", doc_id="id", title="title",
+                                  file_info=file_info, db=mock_db, etl_schema="etl")
+
+        mock_feed.assert_called_once()
+
+@patch("requests.get")
+def test_save_metadata_feed_success_fixed(mock_get, load_module):
+    mock_db = MagicMock()
     mock_get.return_value = mock_requests_get([
-        {"key": "Doc ID:", "value": "12345"},
         {"key": "Content Category:", "value": "Category1"},
         {"key": "Content Owner:", "value": "Owner1"},
         {"key": "Last Edited By:", "value": "Editor1"},
-        {"key": "Last Updated:", "value": "Jan 01, 2023"},
-        {"key": "Expiration Date:", "value": "Dec 31, 2023"},
-        {"key": "Search Description:", "value": "Test Title"}
     ])
 
+    file_info = {"path": "/path/file", "sha256_hash": "hash", "status": "success", "type": "text"}
+
+    load_module.save_metadata_feed(
+        url="https://example.com",
+        language="en",
+        doc_id="docid",
+        title="title",
+        file_info=file_info,
+        db=mock_db,
+        etl_schema="etl",
+        filename_key="filename_key",
+        doc_md_document_id="doc_md_document_id",
+        content_title="title"
+    )
+
+    mock_db.execute_update.assert_called_once()
+
+@patch("requests.get")
+def test_save_metadata_feed_failure_fixed(mock_get, load_module):
     mock_db = MagicMock()
+    mock_get.return_value = mock_requests_get([])  # empty results
 
-    file_info = {"feed_source": "manual", "type": "text"}  # Added 'type' here
+    file_info = {"path": "/path/file", "sha256_hash": "hash", "status": "failed", "message": "error"}
 
-    load_module.save_metadata(url="url", language="en", doc_id="id", title="title",
-                              file_info=file_info, db=mock_db, etl_schema=None)
+    load_module.save_metadata_feed(
+        url="https://example.com",
+        language="en",
+        doc_id="docid",
+        title="title",
+        file_info=file_info,
+        db=mock_db,
+        etl_schema="etl",
+        filename_key="filename_key",
+        doc_md_document_id="doc_md_document_id",
+        content_title="title"
+    )
 
     mock_db.execute_update.assert_called_once()
