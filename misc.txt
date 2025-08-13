@@ -178,3 +178,65 @@ def test_main_block(mock_read_excel, monkeypatch):
     monkeypatch.setattr(azure, "AzureDB", lambda server_name, db_name, uid: mock_db)
 
     module.main()
+
+
+
+
+import WGPT.Utilities  # import the real module first
+
+def load_module_with_patch():
+    base_dir = os.path.expanduser("~/mock_test_env")
+    log_dir = os.path.join(base_dir, "log/dir")
+    base_files_dir = os.path.join(base_dir, "base/dir")
+
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    Path(base_files_dir).mkdir(parents=True, exist_ok=True)
+
+    # Patch only read_config on the real WGPT.Utilities module
+    with patch.object(WGPT.Utilities, "read_config") as mock_read_config:
+        mock_read_config.return_value = {
+            "sql_db": {
+                "server_name": "mock_server",
+                "db_name": "mock_db",
+                "etl_schema": "mock_etl_schema"
+            },
+            "credentials": {
+                "object_id": "mock_object_id"
+            },
+            "urllist_files": {
+                "base_dir": base_files_dir,
+                "internal": {
+                    "biso_controls": {
+                        "starts_with": ["https://internal.example.com"]
+                    },
+                    "en": [
+                        {"filename": "internal_en.xlsx", "level": 1}
+                    ],
+                    "fr": [
+                        {"filename": "internal_fr.xlsx", "level": 2}
+                    ]
+                },
+                "public": {
+                    "biso_controls": {
+                        "starts_with": ["https://public.example.com"]
+                    },
+                    "en": [
+                        {"filename": "public_en.xlsx", "level": 1}
+                    ],
+                    "fr": [
+                        {"filename": "public_fr.xlsx", "level": 2}
+                    ]
+                }
+            },
+            "processing": {
+                "log_dir": log_dir
+            }
+        }
+
+        module_name = "load_url_lists"
+        module_path = os.path.join(os.path.dirname(__file__), "../../bin/00_load_url_lists.py")
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
