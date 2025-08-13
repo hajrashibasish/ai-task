@@ -1,35 +1,15 @@
-def test_save_metadata_with_unknown_feed_source(load_module):
-    mock_db = MagicMock()
-    file_info = {"feed_source": "unknown"}
-    
-    load_module.save_metadata(
-        url="url", language="en", doc_id="id", title="title",
-        file_info=file_info, db=mock_db, etl_schema=None
-    )
-    
-    # No DB updates should happen for unknown feed_source
-    mock_db.execute_update.assert_not_called()
+#!/bin/bash
 
+echo "Cleaning old coverage data..."
+coverage erase
 
-@patch('WGPT.metadata_processing.requests.get')
-def test_save_metadata_feed_failure_non_text(mock_get, load_module):
-    mock_db = MagicMock()
-    mock_get.return_value.content = json.dumps({"results": []}).encode('utf-8')
-    
-    file_info = {
-        "status": "failed",
-        "message": "Error message",
-        "type": "binary",
-        "path": "/path/file.pdf",
-        "sha256_hash": "dummyhash"
-    }
-    
-    load_module.save_metadata_feed(
-        url="url", language="en", doc_id="id", title="title",
-        file_info=file_info, db=mock_db, etl_schema="etl",
-        filename_key="filekey", doc_md_document_id="docmd", content_title="title"
-    )
-    
-    mock_db.execute_update.assert_called_once()
-    args, _ = mock_db.execute_update.call_args
-    assert "last_retrieval_status ='FAILED'" in args[0]
+echo "Running pytest with coverage..."
+coverage run --source=bin -m pytest -vv tests/test_bin/
+
+echo "Generating coverage report..."
+coverage report -m
+
+echo "Generating HTML coverage report..."
+coverage html
+
+echo "Done. Open htmlcov/index.html for detailed report."
