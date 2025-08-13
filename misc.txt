@@ -1,24 +1,17 @@
-from WGPT.metadata_processing import MetadataProcessing
-from unittest.mock import patch, MagicMock
-import json
-
-@patch('WGPT.metadata_processing.requests.get')
-def test_save_metadata_manual_fr_fixed(mock_requests_get, load_module):
-    mock_requests_get.return_value.content = json.dumps({
-        "results": [
-            {"key": "Doc ID:", "value": "<span>12345</span>"},
-            {"key": "Content Category:", "value": "Category1"}
-        ]
-    }).encode('utf-8')
-
-    with patch.object(MetadataProcessing, "save_metadata_en") as mock_en, \
-         patch.object(MetadataProcessing, "save_metadata_fr") as mock_fr:
-
+def test_save_metadata_xml_calls_feed_method_fixed(load_module):
+    # Patch the static method on the class, not on the instance
+    with patch('WGPT.metadata_processing.MetadataProcessing.save_metadata_feed') as mock_feed:
         mock_db = MagicMock()
-        file_info = {"feed_source": "manual", "type": "text"}
+        file_info = {"feed_source": "xml", "type": "text"}
 
-        load_module.save_metadata(url="url", language="fr", doc_id="id", title="title",
-                                  file_info=file_info, db=mock_db, etl_schema=None)
+        load_module.save_metadata(
+            url="url",
+            language="en",
+            doc_id="id",
+            title="title",
+            file_info=file_info,
+            db=mock_db,
+            etl_schema="etl"
+        )
 
-        mock_fr.assert_called_once()
-        mock_en.assert_not_called()
+        mock_feed.assert_called_once()
