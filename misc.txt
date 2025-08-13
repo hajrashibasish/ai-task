@@ -189,6 +189,11 @@ def load_module_with_patch():
     log_dir = os.path.join(base_dir, "log/dir")
     base_files_dir = os.path.join(base_dir, "base/dir")
 
+    os.environ["KMAI_VERSION"] = "1.0.3"
+    os.environ["KMAI_REPO"] = "kmai-etl"
+    os.environ["PROJECT_REPO"] = "wgpt-etl"
+    os.environ["ROOT_DIR"] = "/app1/ingestion"
+
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     Path(base_files_dir).mkdir(parents=True, exist_ok=True)
 
