@@ -1,15 +1,17 @@
 #!/bin/bash
 
-echo "Cleaning old coverage data..."
+echo "Erasing previous coverage data..."
 coverage erase
 
-echo "Running pytest with coverage..."
-coverage run --source=bin -m pytest -vv tests/test_bin/
+echo "Running tests with coverage collection..."
+coverage run -m pytest -vv
 
-echo "Generating coverage report..."
-coverage report -m
+echo "Generating coverage report with missing lines..."
+coverage report -m > coverage_report.txt 2>&1
 
-echo "Generating HTML coverage report..."
-coverage html
+echo "Running pytest test collection only..."
+pytest --collect-only -q > pytest_collect.txt 2>&1
 
-echo "Done. Open htmlcov/index.html for detailed report."
+echo "Done. Reports generated:"
+echo " - coverage_report.txt"
+echo " - pytest_collect.txt"
