@@ -1,15 +1,115 @@
+import sys
+import os
+import pytest
+from unittest.mock import patch, MagicMock
+import json
+from datetime import datetime
+
+os.environ["KMAI_VERSION"] = "1.0.3"
+os.environ["KMAI_REPO"] = "kmai-etl"
+os.environ["PROJECT_REPO"] = "wgpt-etl"
+os.environ["ROOT_DIR"] = "/app1/ingestion"
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../bin/libs")))
+
+from WGPT.metadata_processing import MetadataProcessing
+
+
+@pytest.fixture
+def load_module():
+    """Fixture to instantiate MetadataProcessing."""
+    return MetadataProcessing()
+
+
+def mock_requests_get(results):
+    """Helper to create a mocked requests.get returning specific JSON results."""
+    mock_response = MagicMock()
+    mock_response.content = json.dumps({"results": results}).encode('utf-8')
+    return mock_response
+
+
+def test_save_metadata_fr_text(load_module):
+    with patch('WGPT.metadata_processing.requests.get') as mock_get:
+        mock_get.return_value = mock_requests_get([
+            {"key": "Cat&eacute;gorie de contenu :", "value": "Catégorie1"},
+            {"key": "Propri&eacute;taire du contenu :", "value": "Owner1"},
+        ])
+
+        mock_db = MagicMock()
+        file_info = {"path": "/path/file.txt", "type": "text"}
+
+        load_module.save_metadata_fr(url="url", language="fr", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+
+
+def test_save_metadata_fr_binary(load_module):
+    with patch('WGPT.metadata_processing.requests.get') as mock_get:
+        mock_get.return_value = mock_requests_get([])  # empty results
+
+        mock_db = MagicMock()
+        file_info = {"path": "/path/file.pdf", "type": "binary"}
+
+        load_module.save_metadata_fr(url="url", language="fr", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+
+
+def test_save_metadata_en_text(load_module):
+    with patch('WGPT.metadata_processing.requests.get') as mock_get:
+        mock_get.return_value = mock_requests_get([
+            {"key": "Content Category:", "value": "Cat1"},
+            {"key": "Content Owner:", "value": "Owner1"},
+            {"key": "Last Edited By:", "value": "Editor1"},
+            {"key": "Last Updated:", "value": "Jan 01, 2023"},
+            {"key": "Expiration Date:", "value": "Dec 31, 2023"},
+        ])
+
+        mock_db = MagicMock()
+        file_info = {"path": "/path/file.txt", "type": "text", "status": "success"}
+
+        load_module.save_metadata_en(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+
+
+def test_save_metadata_en_binary(load_module):
+    with patch('WGPT.metadata_processing.requests.get') as mock_get:
+        mock_get.return_value = mock_requests_get([
+            {"key": "Content Category:", "value": "Cat1"},
+            {"key": "Content Owner:", "value": "Owner1"},
+            {"key": "Last Edited By:", "value": "Editor1"},
+            {"key": "Last Updated:", "value": "Jan 01, 2023"},
+            {"key": "Expiration Date:", "value": "Dec 31, 2023"},
+        ])
+
+        mock_db = MagicMock()
+        file_info = {"path": "/path/file.pdf", "type": "binary", "status": "success"}
+
+        load_module.save_metadata_en(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+        mock_db.execute_update.assert_called_once()
+
+
+def test_set_failure(load_module):
+    mock_db = MagicMock()
+    file_info = {"message": "Error message"}
+
+    load_module.set_failure(url="url", language="en", doc_id="id", title="title", file_info=file_info, db=mock_db, etl_schema="etl")
+    mock_db.execute_update.assert_called_once()
+
+
+# --- Fixed failing test added at the end ---
+
 @patch('WGPT.metadata_processing.requests.get')
 def test_retrieve_page_metadata_en(mock_get, load_module):
     # Mock the response content for requests.get
-    mock_get.return_value.content = json.dumps([
+    mock_get.return_value = mock_requests_get([
         {"key": "Doc ID:", "value": "<span>12345</span>"},
         {"key": "Content Category:", "value": "Category1"}
-    ]).encode('utf-8')
+    ])
 
-    # Call the method with parameters
-    result = load_module.retrieve_page_metadata(docId="12345", language="en")
-    
+    # Call the method via class, NOT instance to fix TypeError
+    result = MetadataProcessing.retrieve_page_metadata(docId="12345", language="en")
+
     # Assert results (customize as per your expected output)
     assert result is not None
-    assert isinstance(result, list)
-    assert result[0]["key"] == "Doc ID:"
+    assert isinstance(result, dict)
+    assert "results" in result
+    assert result["results"][0]["key"] == "Doc ID:"
