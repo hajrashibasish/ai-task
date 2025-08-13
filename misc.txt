@@ -1,6 +1,5 @@
 @patch('WGPT.metadata_processing.requests.get')
 def test_save_metadata_manual_en(mock_get, load_module):
-    # Mock the JSON response for retrieve_page_metadata
     mock_get.return_value = mock_requests_get([
         {"key": "Doc ID:", "value": "12345"},
         {"key": "Content Category:", "value": "Category1"},
@@ -11,14 +10,11 @@ def test_save_metadata_manual_en(mock_get, load_module):
         {"key": "Search Description:", "value": "Test Title"}
     ])
 
-    # Mock DB to prevent real DB calls
     mock_db = MagicMock()
 
-    file_info = {"feed_source": "manual"}
+    file_info = {"feed_source": "manual", "type": "text"}  # Added 'type' here
 
-    # Call method under test
     load_module.save_metadata(url="url", language="en", doc_id="id", title="title",
                               file_info=file_info, db=mock_db, etl_schema=None)
 
-    # Assert save_metadata_en was called indirectly by checking DB call
     mock_db.execute_update.assert_called_once()
