@@ -1,247 +1,69 @@
-############################################
-# test_00_load_url_lists.py (Final Mocked Unit Test)
-############################################
+#!/usr/bin/env python3
+"""
+touch_adls_files.py
+Standalone script to create/touch blank files in ADLS source feed container
+for testing purposes.
+"""
 
-import pytest
-from unittest.mock import MagicMock, patch
-import os
-import importlib.util
-import pandas as pd
-from pathlib import Path
-import types
-import sys
+import json
+from azure.identity import ManagedIdentityCredential
+from azure.storage.filedatalake import DataLakeServiceClient
 
-# ---- Helper to Patch and Load Safely ----
-def load_module_with_patch():
-    base_dir = os.path.expanduser("~/mock_test_env")
-    log_dir = os.path.join(base_dir, "log/dir")
-    base_files_dir = os.path.join(base_dir, "base/dir")
+# --- CONFIGURATION (can hardcode or load JSON) ---
+CONFIG_FILE = "wgpt-etl-dev.json"
 
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    Path(base_files_dir).mkdir(parents=True, exist_ok=True)
+# Hardcoded test dates for the files
+TEST_DATES = ["20250812", "20250813", "20250814"]  # 3 fictitious dates
 
-    # Create a fake WGPT.Utilities module with read_config attribute mocked
-    utilities_module = types.ModuleType("WGPT.Utilities")
-    mock_read_config = MagicMock()
-    utilities_module.read_config = mock_read_config
+FILES_TO_TOUCH = [
+    "internal_urllistFr_",
+    "internal_urllist_",
+    "public_urllistFr_",
+    "public_urllist_"
+]
 
-    # Patch sys.modules so WGPT.Utilities is our fake module
-    with patch.dict("sys.modules", {"WGPT.Utilities": utilities_module}):
-        # Setup return value for read_config()
-        mock_read_config.return_value = {
-            "sql_db": {
-                "server_name": "mock_server",
-                "db_name": "mock_db",
-                "etl_schema": "mock_etl_schema"
-            },
-            "credentials": {
-                "object_id": "mock_object_id"
-            },
-            "urllist_files": {
-                "base_dir": base_files_dir,
-                "internal": {
-                    "biso_controls": {
-                        "starts_with": ["https://internal.example.com"]
-                    },
-                    "en": [
-                        {"filename": "internal_en.xlsx", "level": 1}
-                    ],
-                    "fr": [
-                        {"filename": "internal_fr.xlsx", "level": 2}
-                    ]
-                },
-                "public": {
-                    "biso_controls": {
-                        "starts_with": ["https://public.example.com"]
-                    },
-                    "en": [
-                        {"filename": "public_en.xlsx", "level": 1}
-                    ],
-                    "fr": [
-                        {"filename": "public_fr.xlsx", "level": 2}
-                    ]
-                }
-            },
-            "processing": {
-                "log_dir": log_dir
-            }
-        }
+# ------------------
 
-        module_name = "load_url_lists"
-        module_path = os.path.join(os.path.dirname(__file__), "../../bin/00_load_url_lists.py")
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+def load_config(file_path):
+    with open(file_path, "r") as f:
+        return json.load(f)
 
-# ---- TEST CASE 1: Core Function ----
-@patch("pandas.read_excel")
-def test_process_urllist_file(mock_read_excel):
-    mock_read_excel.return_value = pd.DataFrame([{
-        "URL": "https://internal.example.com/doc1",
-        "DOC_ID": "ABC123",
-        "TYPE": "html",
-        "DI": "x",
-        "FP": "x",
-        "PIA": "",
-        "PIC": "x",
-        "TDCT": "",
-        "PT": ""
-    }])
+class AdlsHelper:
+    def __init__(self, storage_account, client_id=None):
+        self.account_name = storage_account
+        self.client_id = client_id
+        self._connect()
+    
+    def _connect(self):
+        credential = ManagedIdentityCredential(client_id=self.client_id) if self.client_id else ManagedIdentityCredential()
+        self.service_client = DataLakeServiceClient(
+            f"https://{self.account_name}.dfs.core.windows.net",
+            credential=credential
+        )
 
-    module = load_module_with_patch()
-
-    mock_db = MagicMock()
-    mock_db.execute_insert = MagicMock()
-
-    module.process_urllist_file(
-        filename=os.path.expanduser("~/mock_test_env/base/dir/internal_en.xlsx"),
-        db=mock_db,
-        level=1,
-        classification="internal",
-        language="en",
-        biso_controls=["https://internal.example.com"],
-        etl_schema="mock_etl_schema"
-    )
-
-    assert mock_db.execute_insert.called
-
-# ---- TEST CASE 2: Main Block Simulation (Improved for Coverage) ----
-@patch("pandas.read_excel")
-def test_main_block(mock_read_excel, monkeypatch):
-    monkeypatch.setenv("KMAI_VERSION", "1.0.3")
-    monkeypatch.setenv("KMAI_REPO", "kmai-etl")
-    monkeypatch.setenv("PROJECT_REPO", "wgpt-etl")
-    monkeypatch.setenv("ROOT_DIR", "/app1/ingestion")
-
-    sys.modules["WGPT.Utilities"] = MagicMock()
-    import WGPT
-
-    WGPT.Utilities.read_config.return_value = {
-        "sql_db": {
-            "server_name": "mock_server",
-            "db_name": "mock_db",
-            "etl_schema": "mock_etl_schema"
-        },
-        "credentials": {
-            "object_id": "mock_object_id"
-        },
-        "urllist_files": {
-            "base_dir": os.path.expanduser("~/mock_test_env/base/dir"),
-            "internal": {
-                "biso_controls": {
-                    "starts_with": ["https://internal.example.com"]
-                },
-                "en": [
-                    {"filename": "internal_en.xlsx", "level": 1}
-                ],
-                "fr": [
-                    {"filename": "internal_fr.xlsx", "level": 2}
-                ]
-            },
-            "public": {
-                "biso_controls": {
-                    "starts_with": ["https://public.example.com"]
-                },
-                "en": [
-                    {"filename": "public_en.xlsx", "level": 1}
-                ],
-                "fr": [
-                    {"filename": "public_fr.xlsx", "level": 2}
-                ]
-            }
-        },
-        "processing": {
-            "log_dir": os.path.expanduser("~/mock_test_env/log/dir")
-        }
-    }
-
-    mock_read_excel.side_effect = [
-        pd.DataFrame([{  # internal/en
-            "URL": "https://internal.example.com/doc",
-            "DOC_ID": "X123",
-            "TYPE": "html",
-            "DI": "x", "FP": "", "PIA": "", "PIC": "", "TDCT": "", "PT": ""
-        }]),
-        Exception("Malformed file"),  # internal/fr
-        FileNotFoundError("Missing file"),  # public/en
-        pd.DataFrame([])  # public/fr
-    ]
-
-    mock_db = MagicMock()
-    mock_db.execute_insert = MagicMock()
-    mock_db.executeQuery = MagicMock(return_value=[])
-
-    module = load_module_with_patch()
-
-    from KMAI import azure
-    monkeypatch.setattr(azure, "AzureDB", lambda server_name, db_name, uid: mock_db)
-
-    module.main()
+    def touch_file(self, container_name, file_name):
+        file_system_client = self.service_client.get_file_system_client(container_name)
+        file_client = file_system_client.get_file_client(file_name)
+        try:
+            file_client.create_file()
+            print(f"Touched file: {file_name}")
+        except Exception as e:
+            print(f"Failed to touch {file_name}: {e}")
 
 
+def main():
+    config = load_config(CONFIG_FILE)
+    storage_account = config["adls_storage"]["storage_account"]
+    container_name = config["adls_storage"]["container_names"]["feed"]
+    client_id = config["credentials"].get("client_id")
 
+    adls = AdlsHelper(storage_account, client_id)
 
-import WGPT.Utilities  # import the real module first
+    # Loop through files and dates
+    for base_name in FILES_TO_TOUCH:
+        for date in TEST_DATES:
+            file_name = f"{base_name}{date}.xlsx"
+            adls.touch_file(container_name, file_name)
 
-def load_module_with_patch():
-    base_dir = os.path.expanduser("~/mock_test_env")
-    log_dir = os.path.join(base_dir, "log/dir")
-    base_files_dir = os.path.join(base_dir, "base/dir")
-
-    os.environ["KMAI_VERSION"] = "1.0.3"
-    os.environ["KMAI_REPO"] = "kmai-etl"
-    os.environ["PROJECT_REPO"] = "wgpt-etl"
-    os.environ["ROOT_DIR"] = "/app1/ingestion"
-
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    Path(base_files_dir).mkdir(parents=True, exist_ok=True)
-
-    # Patch only read_config on the real WGPT.Utilities module
-    with patch.object(WGPT.Utilities, "read_config") as mock_read_config:
-        mock_read_config.return_value = {
-            "sql_db": {
-                "server_name": "mock_server",
-                "db_name": "mock_db",
-                "etl_schema": "mock_etl_schema"
-            },
-            "credentials": {
-                "object_id": "mock_object_id"
-            },
-            "urllist_files": {
-                "base_dir": base_files_dir,
-                "internal": {
-                    "biso_controls": {
-                        "starts_with": ["https://internal.example.com"]
-                    },
-                    "en": [
-                        {"filename": "internal_en.xlsx", "level": 1}
-                    ],
-                    "fr": [
-                        {"filename": "internal_fr.xlsx", "level": 2}
-                    ]
-                },
-                "public": {
-                    "biso_controls": {
-                        "starts_with": ["https://public.example.com"]
-                    },
-                    "en": [
-                        {"filename": "public_en.xlsx", "level": 1}
-                    ],
-                    "fr": [
-                        {"filename": "public_fr.xlsx", "level": 2}
-                    ]
-                }
-            },
-            "processing": {
-                "log_dir": log_dir
-            }
-        }
-
-        module_name = "load_url_lists"
-        module_path = os.path.join(os.path.dirname(__file__), "../../bin/00_load_url_lists.py")
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
+if __name__ == "__main__":
+    main()
