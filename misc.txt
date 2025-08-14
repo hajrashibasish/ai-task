@@ -1,69 +1,148 @@
-#!/usr/bin/env python3
-"""
-touch_adls_files.py
-Standalone script to create/touch blank files in ADLS source feed container
-for testing purposes.
-"""
+# tests/conftest.py
+import os
+import sys
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+from unittest.mock import MagicMock, patch
+import pytest
 
-import json
-from azure.identity import ManagedIdentityCredential
-from azure.storage.filedatalake import DataLakeServiceClient
+# -----------------------------------------------------------------------------
+# 1) Make WGPT importable: insert the *parent* of WGPT into sys.path
+#    - Supports both bin/lib and bin/libs
+#    - Survives nested checkouts (…/wkmai-wgpt-etl/wkmai-wgpt-etl/…)
+# -----------------------------------------------------------------------------
+def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path:
+    parts = start.parts
+    indices = [i for i, p in enumerate(parts) if p in markers]
+    if indices:
+        return Path(*parts[: indices[-1] + 1])  # deepest marker
+    # Fallback: walk up until we see bin/lib(s)/WGPT
+    for p in [start, *start.parents]:
+        if (p / "bin" / "lib" / "WGPT").is_dir() or (p / "bin" / "libs" / "WGPT").is_dir():
+            return p
+    raise RuntimeError(f"Could not locate repo root from: {start}")
 
-# --- CONFIGURATION (can hardcode or load JSON) ---
-CONFIG_FILE = "wgpt-etl-dev.json"
+def _add_wgpt_parent_to_syspath(current_file: str) -> None:
+    here = Path(current_file).resolve()
+    repo_root = _find_repo_root(here)
+    candidates = [repo_root / "bin" / "lib", repo_root / "bin" / "libs"]
+    for cand in candidates:
+        if (cand / "WGPT").is_dir():
+            s = str(cand)
+            if s not in sys.path:
+                sys.path.insert(0, s)  # IMPORTANT: parent of WGPT, not WGPT itself
+            return
+    raise ImportError(
+        "Could not find WGPT package. Expected one of:\n"
+        f"  {repo_root}/bin/lib/WGPT  or  {repo_root}/bin/libs/WGPT"
+    )
 
-# Hardcoded test dates for the files
-TEST_DATES = ["20250812", "20250813", "20250814"]  # 3 fictitious dates
+# Do this BEFORE any test tries to import WGPT.*
+_add_wgpt_parent_to_syspath(__file__)
 
-FILES_TO_TOUCH = [
-    "internal_urllistFr_",
-    "internal_urllist_",
-    "public_urllistFr_",
-    "public_urllist_"
-]
+# -----------------------------------------------------------------------------
+# 2) Lightweight pyodbc shim so imports don’t fail in CI/EDP
+# -----------------------------------------------------------------------------
+class MockCursor:
+    def execute(self, *args, **kwargs): pass
+    def fetchone(self): return ("15.0.2000.5",)
+    def setinputsizes(self, *args, **kwargs): return
+    @property
+    def description(self): return [("ProductVersion", None, None, None, None)]
+    def rowcount(self): return
+    def close(self): pass
 
-# ------------------
+class MockConnection:
+    def cursor(self): return MockCursor()
+    def add_output_converter(self, *args, **kwargs): pass
+    def rollback(self): pass
+    def commit(self): pass
+    def getinfo(self, info):
+        # Common constant for SQL_DBMS_VER is 2
+        if info == 2:
+            return "15.0.2000.5"
 
-def load_config(file_path):
-    with open(file_path, "r") as f:
-        return json.load(f)
+class MockImporter:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "pyodbc":
+            module = ModuleType("pyodbc")
+            module.__loader__ = MagicMock()
+            module.__package__ = ""
+            module.__spec__ = MagicMock()
+            module.version = "4.0.30"
+            module.connect = MagicMock(return_value=MockConnection())
+            module.paramstyle = "qmark"
+            module.Cursor = MockCursor
+            module.Error = Exception
+            module.ProgrammingError = Exception
+            module.SQL_DBMS_VER = 2
+            module.NUMBER = 1
+            module.SQL_VARCHAR = "12"
+            module.DATETIME = "93"
+            sys.modules[fullname] = module
+            return module.__spec__
+        return None
 
-class AdlsHelper:
-    def __init__(self, storage_account, client_id=None):
-        self.account_name = storage_account
-        self.client_id = client_id
-        self._connect()
-    
-    def _connect(self):
-        credential = ManagedIdentityCredential(client_id=self.client_id) if self.client_id else ManagedIdentityCredential()
-        self.service_client = DataLakeServiceClient(
-            f"https://{self.account_name}.dfs.core.windows.net",
-            credential=credential
-        )
+# Ensure pyodbc is mockable before test collection imports it
+sys.meta_path.insert(0, MockImporter())
 
-    def touch_file(self, container_name, file_name):
-        file_system_client = self.service_client.get_file_system_client(container_name)
-        file_client = file_system_client.get_file_client(file_name)
-        try:
-            file_client.create_file()
-            print(f"Touched file: {file_name}")
-        except Exception as e:
-            print(f"Failed to touch {file_name}: {e}")
+# -----------------------------------------------------------------------------
+# 3) Helpers & Fixtures
+# -----------------------------------------------------------------------------
+def get_test_file_path(current_file, target_folder="wkmai-wgpt-etl"):
+    absolute_path = os.path.abspath(current_file)
+    path_parts = absolute_path.split(os.sep)
 
+    # Find last occurrence of target_folder
+    if target_folder not in path_parts:
+        raise ValueError(f"Target folder {target_folder} not in path: {absolute_path}")
+    wgpt_index = len(path_parts) - 1 - path_parts[::-1].index(target_folder)
 
-def main():
-    config = load_config(CONFIG_FILE)
-    storage_account = config["adls_storage"]["storage_account"]
-    container_name = config["adls_storage"]["container_names"]["feed"]
-    client_id = config["credentials"].get("client_id")
+    source_path_parts = path_parts[: wgpt_index + 1]
 
-    adls = AdlsHelper(storage_account, client_id)
+    # Remove "tests" from the path
+    if "tests" in path_parts:
+        tests_index = path_parts.index("tests")
+        source_path_parts += path_parts[tests_index + 1 :]
+    else:
+        source_path_parts += path_parts[wgpt_index + 1 :]
 
-    # Loop through files and dates
-    for base_name in FILES_TO_TOUCH:
-        for date in TEST_DATES:
-            file_name = f"{base_name}{date}.xlsx"
-            adls.touch_file(container_name, file_name)
+    # Strip 'test_' prefixes
+    source_path_parts = [part[5:] if part.startswith("test_") else part for part in source_path_parts]
 
-if __name__ == "__main__":
-    main()
+    source_file_path = os.sep.join(source_path_parts)
+    return source_file_path
+
+@pytest.fixture
+def import_module():
+    """Dynamically import a module by name and file path (after prefix munging)."""
+    def _import_module(module_name, file_path):
+        spec = importlib.util.spec_from_file_location(module_name, get_test_file_path(file_path))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+    return _import_module
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_os_environ():
+    """Fixture to mock os.environ (do NOT clear to avoid clobbering EDP vars)."""
+    mock_env = {
+        "KMAI_VERSION": "1.0.4",
+        "PROJECT_REPO": "wgpt-etl",
+        "ROOT_DIR": "/tmp",
+        "KMAI_REPO": "kmai-etl",
+    }
+    with patch.dict(os.environ, mock_env, clear=False):
+        yield mock_env
+
+@pytest.fixture
+def mock_db():
+    """Fixture to mock the database object."""
+    mock_db = MagicMock()
+    mock_db.executeQuery = MagicMock()
+    mock_db.read_sql = MagicMock(return_value=([], []))
+    mock_db.execute_insert = MagicMock()
+    mock_db.__enter__.return_value = mock_db
+    return mock_db
