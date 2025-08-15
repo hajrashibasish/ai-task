@@ -1,303 +1,284 @@
-def main_loop():
-    config = WGPT.Utilities.read_config()
-    server_name = config['sql_db']['server_name']
-    db_name = config['sql_db']['db_name']
-    etl_schema = config['sql_db']['etl_schema']
-    object_id = config['credentials']['object_id']
-    document_scopes = config['document_scopes']
-
-    azure_loggers = [
-        "azure.identity._credentials.managed_identity",
-        "azure.core.pipeline.policies.http_logging_policy"
-    ]
-    for azl in azure_loggers:
-        azlogger = logging.getLogger(azl)
-        azlogger.setLevel(logging.ERROR)
-
-    logging.basicConfig(filename=f"{log_file_path}", format="%(levelname)s:%(asctime)s:%(name)s:[DocConversion] %(message)s", level=logging.INFO)
-
-    logger = logging.getLogger("__doc_conversion__")
-
-    for classification in document_scopes.get("classification"):
-        for language in document_scopes.get("language"):
-            process_doc_conversion(language, classification, logger)
-
-
-if __name__ == "__main__":
-    main_loop()
-
-
-
-
-
-
-import pytest
-from unittest.mock import patch, MagicMock
+# tests/conftest.py
 import os
+import sys
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+from unittest.mock import MagicMock, patch
+import tempfile
+import pytest
 
+# -------------------- WGPT path bootstrap (bin/lib or bin/libs) --------------------
+def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path:
+    parts = start.parts
+    idxs = [i for i, p in enumerate(parts) if p in markers]
+    if idxs:
+        return Path(*parts[: idxs[-1] + 1])
+    for p in [start, *start.parents]:
+        if (p / "bin" / "lib" / "WGPT").is_dir() or (p / "bin" / "libs" / "WGPT").is_dir():
+            return p
+    raise RuntimeError(f"Could not locate repo root from: {start}")
+
+def _add_wgpt_parent_to_syspath(current_file: str) -> None:
+    here = Path(current_file).resolve()
+    repo_root = _find_repo_root(here)
+    for cand in (repo_root / "bin" / "lib", repo_root / "bin" / "libs"):
+        if (cand / "WGPT").is_dir():
+            s = str(cand)
+            if s not in sys.path:
+                sys.path.insert(0, s)  # parent of WGPT
+            return
+    raise ImportError("WGPT not found under bin/lib or bin/libs")
+
+_add_wgpt_parent_to_syspath(__file__)
+
+# -------------------- Safe logging.FileHandler shim (prevents FS errors) --------------------
+import logging
+
+class _SafeFileHandler(logging.FileHandler):
+    """
+    Drop-in replacement for logging.FileHandler that:
+      1) Creates parent dirs if possible
+      2) Falls back to a temp file if target path is not creatable/writable
+    """
+    def __init__(self, filename, mode='a', encoding=None, delay=False, errors=None):
+        target = filename
+        try:
+            parent = os.path.dirname(os.path.abspath(filename))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            # Try opening using base class (this also validates writability if delay is False)
+            super().__init__(filename, mode=mode, encoding=encoding, delay=delay, errors=errors)
+            return
+        except Exception:
+            # Fallback to temp
+            tmp = os.path.join(tempfile.gettempdir(), os.path.basename(filename) or "edp.log")
+            target = tmp
+            super().__init__(tmp, mode=mode, encoding=encoding, delay=delay, errors=errors)
+        finally:
+            # Expose where we actually wrote for debugging (not used by tests unless they read handler.baseFilename)
+            self._resolved_filename = target
+
+# Install shim early so basicConfig / FileHandler in imported modules use it
+logging.FileHandler = _SafeFileHandler  # type: ignore
+
+# -------------------- KMAI full stub (only if real KMAI is absent) --------------------
+def _ensure_kmai_stub():
+    if importlib.util.find_spec("KMAI") is not None:
+        return  # real KMAI available (e.g., in your VM) – do nothing
+
+    kmai_pkg = ModuleType("KMAI")
+
+    # ---- KMAI.azure ----
+    azure_mod = ModuleType("KMAI.azure")
+    class AzureDB:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc, tb): pass
+        def executeQuery(self, *a, **k): return []
+        def read_sql(self, *a, **k): return ([], [])
+        def execute_insert(self, *a, **k): return None
+    class AzureSearchIndex:
+        def __init__(self, *args, **kwargs): pass
+        def upsert(self, *a, **k): return None
+        def search(self, *a, **k): return []
+    class AzureADLS:
+        def __init__(self, *args, **kwargs): pass
+        def upload(self, *a, **k): return None
+        def download(self, *a, **k): return b""
+        def exists(self, *a, **k): return False
+        def listdir(self, *a, **k): return []
+    azure_mod.AzureDB = AzureDB
+    azure_mod.AzureSearchIndex = AzureSearchIndex
+    azure_mod.AzureADLS = AzureADLS
+
+    # ---- KMAI.ingestion ----
+    ingestion_mod = ModuleType("KMAI.ingestion")
+    class DocumentRetrieval:
+        def __init__(self, *args, **kwargs): pass
+        def fetch(self, *a, **k): return []
+    class Pdf2Markdown:
+        def __init__(self, *args, **kwargs): pass
+        def convert(self, *a, **k): return "# stub md"
+    class Ppt2Markdown:  # <— missing in failures
+        def __init__(self, *args, **kwargs): pass
+        def convert(self, *a, **k): return "# stub ppt md"
+    class Excel2Markdown:
+        def __init__(self, *args, **kwargs): pass
+        def convert(self, *a, **k): return "# stub table md"
+    class TDCertificate:
+        def __init__(self, *args, **kwargs): pass
+        def validate(self, *a, **k): return True
+    class DocumentList:
+        def __init__(self, *args, **kwargs): pass
+        def get_urls_by_hash(self, *a, **k): return []
+        def get_urls(self, *a, **k): return []
+        def enrich(self, *a, **k): return []
+
+    ingestion_mod.DocumentRetrieval = DocumentRetrieval
+    ingestion_mod.Pdf2Markdown = Pdf2Markdown
+    ingestion_mod.Ppt2Markdown = Ppt2Markdown
+    ingestion_mod.Excel2Markdown = Excel2Markdown
+    ingestion_mod.TDCertificate = TDCertificate
+    ingestion_mod.DocumentList = DocumentList
+
+    # ---- KMAI.processing ----
+    processing_mod = ModuleType("KMAI.processing")
+    class KMAIDocumentProcessing:
+        def __init__(self, *args, **kwargs): pass
+        def process(self, *a, **k): return None
+        def clean_markdown(self, s, *a, **k): return s
+        def postprocess(self, s, *a, **k): return s
+    class DocumentSplit:
+        def __init__(self, *args, **kwargs): pass
+        def split(self, *a, **k): return []
+    class ArchiveProcessing:  # <— tests import this symbol
+        def __init__(self, *args, **kwargs): pass
+        def export_document_list(self, *a, **k): return True
+        def archive_raw_files(self, *a, **k): return True
+        def archive_md_files(self, *a, **k): return True
+        def upload_to_adls(self, *a, **k): return True
+
+    processing_mod.KMAIDocumentProcessing = KMAIDocumentProcessing
+    processing_mod.DocumentSplit = DocumentSplit
+    processing_mod.ArchiveProcessing = ArchiveProcessing
+
+    # ---- KMAI.utilities ----
+    utilities_mod = ModuleType("KMAI.utilities")
+    def read_config(*args, **kwargs): return {}
+    def read_json_config(*args, **kwargs): return {}
+    utilities_mod.read_config = read_config
+    utilities_mod.read_json_config = read_json_config
+
+    # Wire up the package
+    kmai_pkg.azure = azure_mod
+    kmai_pkg.ingestion = ingestion_mod
+    kmai_pkg.processing = processing_mod
+    kmai_pkg.utilities = utilities_mod
+
+    sys.modules["KMAI"] = kmai_pkg
+    sys.modules["KMAI.azure"] = azure_mod
+    sys.modules["KMAI.ingestion"] = ingestion_mod
+    sys.modules["KMAI.processing"] = processing_mod
+    sys.modules["KMAI.utilities"] = utilities_mod
+
+_ensure_kmai_stub()
+
+# -------------------- usecase.prod.common.dataclasses stub (Bottlenose) --------------------
+def _ensure_usecase_stub():
+    if importlib.util.find_spec("usecase") is not None:
+        return
+
+    usecase_pkg = ModuleType("usecase")
+    prod_pkg = ModuleType("usecase.prod")
+    common_pkg = ModuleType("usecase.prod.common")
+    dataclasses_mod = ModuleType("usecase.prod.common.dataclasses")
+
+    # Extremely permissive dataclasses; tests can access any fields safely.
+    class IngestionConfig:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+    class DocumentWithMetadata:
+        def __init__(self, document: str = "", metadata: dict = None, **kwargs):
+            self.document = document
+            self.metadata = metadata or {}
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    dataclasses_mod.IngestionConfig = IngestionConfig
+    dataclasses_mod.DocumentWithMetadata = DocumentWithMetadata
+
+    sys.modules["usecase"] = usecase_pkg
+    sys.modules["usecase.prod"] = prod_pkg
+    sys.modules["usecase.prod.common"] = common_pkg
+    sys.modules["usecase.prod.common.dataclasses"] = dataclasses_mod
+
+_ensure_usecase_stub()
+
+# -------------------- pyodbc shim --------------------
+class _MockCursor:
+    def execute(self, *a, **k): pass
+    def fetchone(self): return ("15.0.2000.5",)
+    def setinputsizes(self, *a, **k): return
+    @property
+    def description(self): return [("ProductVersion", None, None, None, None)]
+    def rowcount(self): return
+    def close(self): pass
+
+class _MockConnection:
+    def cursor(self): return _MockCursor()
+    def add_output_converter(self, *a, **k): pass
+    def rollback(self): pass
+    def commit(self): pass
+    def getinfo(self, info):
+        if info == 2:  # SQL_DBMS_VER
+            return "15.0.2000.5"
+
+class _MockImporter:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "pyodbc":
+            mod = ModuleType("pyodbc")
+            mod.__loader__ = MagicMock()
+            mod.__package__ = ""
+            mod.__spec__ = MagicMock()
+            mod.version = "4.0.30"
+            mod.connect = MagicMock(return_value=_MockConnection())
+            mod.paramstyle = "qmark"
+            mod.Cursor = _MockCursor
+            mod.Error = Exception
+            mod.ProgrammingError = Exception
+            mod.SQL_DBMS_VER = 2
+            mod.NUMBER = 1
+            mod.SQL_VARCHAR = "12"
+            mod.DATETIME = "93"
+            sys.modules[fullname] = mod
+            return mod.__spec__
+        return None
+
+sys.meta_path.insert(0, _MockImporter())
+
+# -------------------- helpers & fixtures --------------------
+def get_test_file_path(current_file, target_folder="wkmai-wgpt-etl"):
+    absolute_path = os.path.abspath(current_file)
+    parts = absolute_path.split(os.sep)
+    if target_folder not in parts:
+        raise ValueError(f"{target_folder} not in path: {absolute_path}")
+    idx = len(parts) - 1 - parts[::-1].index(target_folder)
+    out = parts[: idx + 1]
+    if "tests" in parts:
+        out += parts[parts.index("tests") + 1 :]
+    else:
+        out += parts[idx + 1 :]
+    out = [p[5:] if p.startswith("test_") else p for p in out]
+    return os.sep.join(out)
 
 @pytest.fixture
-def load_module(import_module):
-    """Helper to load the doc_conversion module with mocked env."""
-    os.environ["KMAI_VERSION"] = "dev"
-    os.environ["PROJECT_REPO"] = "wgpt-etl"
-    os.environ["ROOT_DIR"] = "/app1/ingestion"
-    os.environ["KMAI_REPO"] = "kmai"
-    os.environ["INGESTION_CONFIG_FILE"] = "wgpt-etl-dev.json"
-    return import_module("doc_conversion", os.path.abspath(__file__))
+def import_module():
+    def _import_module(module_name, file_path):
+        spec = importlib.util.spec_from_file_location(module_name, get_test_file_path(file_path))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+    return _import_module
 
-
-def test_process_doc_conversion_html(load_module):
-    logger = MagicMock()
-    config_mock = {
-        "processing": {
-            "output_dir": "/tmp/output",
-            "md_dir": "/tmp/md"
-        },
-        "sql_db": {
-            "etl_schema": "etl",
-            "server_name": "srv",
-            "db_name": "db"
-        },
-        "credentials": {
-            "object_id": "xyz"
-        },
-        "document_scopes": {
-            "classification": ["internal"],
-            "language": ["en"],
-            "filter_columns": {"key": "value"}
-        },
-        "failed_document_threshold_pct": 1.0
-    }
-
-    urls_mock = {
-        "internal": {
-            "en": {
-                "http://example.com/doc1.html": {"doc_id": "doc1"}
-            }
-        }
-    }
-
-    os_walk_return = [
-        ("/tmp/output/internal/en", [], ["doc1.html"])
-    ]
-
-    with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
-         patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
-         patch.object(load_module, "os") as mock_os, \
-         patch.object(load_module, "process_html_to_markdown", return_value={"status": "Successful"}):
-        mock_os.walk.return_value = os_walk_return
-        mock_os.path.exists.return_value = True
-        mock_os.remove = MagicMock()
-        mock_os.makedirs = MagicMock()
-        result = load_module.process_doc_conversion("en", "internal", logger)
-        assert result is not None
-
-
-@patch("builtins.open", new_callable=MagicMock)
-def test_process_html_to_markdown_success(mock_open, load_module):
-    fake_text = "<html><body><h1>Hello</h1></body></html>"
-    fake_output = "## Hello"
-    logger = MagicMock()
-
-
-
-==================
-
-
-def test_process_doc_conversion_html(load_module):
-    logger = MagicMock()
-
-    config_mock = {
-        "processing": {
-            "output_dir": "/tmp/output",
-            "md_dir": "/tmp/md"
-        },
-        "sql_db": {
-            "etl_schema": "etl",
-            "server_name": "srv",
-            "db_name": "db"
-        },
-        "credentials": {
-            "object_id": "xyz"
-        },
-        "document_scopes": {
-            "classification": ["internal"],
-            "language": ["en"],
-            "filter_columns": {"key": "value"}
-        },
-        "failed_document_threshold_pct": 1.0
-    }
-
-    urls_mock = {
-        "internal": {
-            "en": {
-                "doc1": {"doc_id": "doc1", "url": "http://example.com/doc1.html"}
-            }
-        }
-    }
-
-    os_walk_return = [
-        ("/tmp/output/internal/en", [], ["doc1.html"])
-    ]
-
-    with patch.object(load_module.WGPT.Utilities, "read_config", return_value=config_mock), \
-         patch.object(load_module, "retrieve_url_list", return_value=urls_mock), \
-         patch.object(load_module, "os") as mock_os, \
-         patch.object(load_module, "process_html_to_markdown", return_value={"status": "Successful"}):
-
-        mock_os.walk.return_value = os_walk_return
-        mock_os.path.exists.return_value = True
-        mock_os.remove = MagicMock()
-        mock_os.makedirs = MagicMock()
-        mock_os.path.splitext = os.path.splitext
-
-        result = load_module.process_doc_conversion("en", "internal", logger)
-        print("Returned result", result)
-
-        assert result == {"doc1": {"status": "Successful"}}
-
-
-    mock_fd = MagicMock()
-    mock_fd.read.return_value = fake_text
-    mock_open.return_value.__enter__.side_effect = [mock_fd, MagicMock()]
-    dp_mock = MagicMock()
-    dp_mock.run_pipeline.return_value = fake_output
-
-    with patch.object(load_module, "DocumentProcessing", return_value=dp_mock):
-        result = load_module.process_html_to_markdown("/tmp/file.html", "/tmp", "en", {})
-        assert result["status"] == "Successful"
-        assert "document_length" in result
-
-
-def test_process_pdf_to_markdown(load_module):
-    config = {
-        "credentials": {"client_id": "abc"},
-        "open_ai": {
-            "gpt_4o_model": "gpt",
-            "endpoint_url": "https://xyz",
-            "openai_api_version": "v1",
-            "pdf_conversion_prompt": "convert",
-            "pdf_conversion_dpi": 300
-        }
-    }
-    dp_mock = MagicMock()
-    dp_mock.run_pipeline.return_value = "PDF to MD content"
-    with patch.object(load_module, "DocumentProcessing", return_value=dp_mock):
-        result = load_module.process_pdf_to_markdown(config, "/tmp/doc.pdf", "/tmp", {})
-        assert result["document_length"] > 0
-
-
-def test_process_excel_to_markdown(load_module):
-    config = {}
-    dp_mock = MagicMock()
-    dp_mock.run_pipeline.return_value = "Excel to Markdown"
-    with patch.object(load_module, "DocumentProcessing", return_value=dp_mock):
-        result = load_module.process_excel_to_markdown(config, "/tmp/excel.xlsx", "/tmp", {})
-        assert result["document_length"] > 0
-
-
-def test_process_ppt_to_markdown(load_module):
-    return_val = {}
-    ppt_mock = MagicMock()
-    ppt_mock.convert.return_value = ("/tmp/doc.md", 1000)
-    with patch.object(load_module, "Ppt2Markdown", return_value=ppt_mock):
-        result = load_module.process_ppt_to_markdown("/tmp/file.pptx", "/tmp", return_val)
-        assert result["status"] == "Successful"
-        assert result["document_length"] == 1000
-
-
-
-
-
-
-
-
-
-
-====================
-
-import pytest
-from unittest.mock import patch, MagicMock, mock_open
-import os
+@pytest.fixture(scope="session", autouse=True)
+def mock_os_environ():
+    with patch.dict(os.environ, {
+        "KMAI_VERSION": os.environ.get("KMAI_VERSION", "dev"),
+        "PROJECT_REPO": os.environ.get("PROJECT_REPO", "wgpt-etl"),
+        "ROOT_DIR": os.environ.get("ROOT_DIR", "/app1/ingestion"),
+        "KMAI_REPO": os.environ.get("KMAI_REPO", "kmai"),
+        "INGESTION_CONFIG_FILE": os.environ.get("INGESTION_CONFIG_FILE", "wgpt-etl-dev.json"),
+    }, clear=False):
+        yield
 
 @pytest.fixture
-def load_module(import_module):
-    """Helper to dynamically load doc_conversion.py with env vars."""
-    os.environ["KMAI_VERSION"] = "dev"
-    os.environ["PROJECT_REPO"] = "wgpt-etl"
-    os.environ["ROOT_DIR"] = "/app1/ingestion"
-    os.environ["KMAI_REPO"] = "kmai"
-    os.environ["INGESTION_CONFIG_FILE"] = "wgpt-etl-dev.json"
-    return import_module("doc_conversion", os.path.abspath(__file__))
-
-
-def test_retrieve_url_list(load_module):
-    mock_db = MagicMock()
-
-    # Mock config
-    mock_read_config = MagicMock(return_value={
-        "sql_db": {
-            "server_name": "test_server",
-            "db_name": "test_db",
-            "etl_schema": "etl"
-        },
-        "credentials": {"object_id": "test_object_id"},
-        "document_scopes": {"filter_columns": {"key": "value"}}
-    })
-
-    # Mock DocumentList
-    mock_doclist = MagicMock()
-    mock_doclist_instance = MagicMock()
-    mock_doclist_instance.get_urls.return_value = {"url1": "metadata1"}
-    mock_doclist.return_value = mock_doclist_instance
-
-    with patch.object(load_module, "WGPT") as mock_wgpt, \
-         patch.object(load_module, "AzureDB", return_value=mock_db), \
-         patch.object(load_module, "DocumentList", mock_doclist):
-
-        mock_wgpt.Utilities.read_config = mock_read_config
-
-        result = load_module.retrieve_url_list("classification", "language", MagicMock(), "etl")
-
-        assert result == {"url1": "metadata1"}
-        mock_doclist_instance.get_urls.assert_called_once_with(
-            {
-                "classification": "classification",
-                "language": "language",
-                "active_flag": "Y",
-                "etl_schema": "etl",
-                "key": "value"
-            },
-            None
-        )
-
-
-@patch("builtins.open", new_callable=mock_open, read_data="<html>content</html>")
-def test_process_html_to_markdown(mock_open, load_module):
-    mock_document_processing = MagicMock()
-    mock_dp_instance = MagicMock()
-    mock_dp_instance.run_pipeline.return_value = "markdown content"
-    mock_document_processing.return_value = mock_dp_instance
-
-    file_path = "/path/to/file.html"
-    output_dir = "/output"
-    language = "en"
-    return_values = {}
-
-    with patch.object(load_module, "DocumentProcessing", mock_document_processing):
-        result = load_module.process_html_to_markdown(file_path, output_dir, language, return_values)
-
-        assert result["status"] == "Successful"
-        assert result["document_length"] == len("markdown content")
-
-        mock_open.assert_any_call(file_path, "r")
-        mock_open.assert_any_call(f"{output_dir}/file.md", "w")
-        mock_dp_instance.run_pipeline.assert_called_once_with(
-            input_data="<html>content</html>",
-            paragraph=True,
-            link=True,
-            language=language,
-            return_value=return_values
-        )
-
+def mock_db():
+    db = MagicMock()
+    db.executeQuery = MagicMock()
+    db.read_sql = MagicMock(return_value=([], []))
+    db.execute_insert = MagicMock()
+    db.__enter__.return_value = db
+    return db
