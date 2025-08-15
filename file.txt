@@ -1,3 +1,4 @@
+# tests/conftest.py
 import os
 import sys
 import importlib.util
@@ -6,8 +7,23 @@ from pathlib import Path
 from types import ModuleType
 from dataclasses import dataclass, field
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import pytest
+
+# ======================= EARLY ENV HARDENING =========================
+# If the runner injects ROOT_DIR like /app or /app1, force a writable fallback
+# *now*, before any module configures logging at import time.
+_project_repo = os.environ.get("PROJECT_REPO", "wgpt-etl")
+_root_dir = os.environ.get("ROOT_DIR", "")
+if _root_dir.startswith("/app"):
+    safe_root = "/tmp/ingestion"
+    os.environ["ROOT_DIR"] = safe_root
+    os.environ.setdefault("PROJECT_REPO", _project_repo)
+    # precreate logs path so FileHandler won't explode on import-time logging
+    try:
+        (Path(safe_root) / os.environ["PROJECT_REPO"] / "logs").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
 # ======================= repo / path bootstrap =======================
 def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path:
@@ -85,7 +101,7 @@ def _ensure_kmai_ok():
 
         # ingestion
         ingestion_mod = ModuleType("KMAI.ingestion")
-        class DocumentRetrieval:  # pragma: no cover
+        class DocumentRetrieval:
             def __init__(self, *_, **__): ...
             def fetch(self, *a, **k): return []
         class Pdf2Markdown:
@@ -285,25 +301,23 @@ def import_module():
     return _import_module
 
 @pytest.fixture(scope="session", autouse=True)
-def mock_os_environ(tmp_path_factory):
+def mock_os_environ(tmp_path_factory, monkeypatch):
     """
-    *** Key fix for EDP ***
-    Use a writable temp root instead of /app1/ingestion and create logs dir eagerly.
+    Key EDP fix:
+    - Force a writable tmp root for the duration of the session
+    - Precreate <ROOT_DIR>/<PROJECT_REPO>/logs
     """
     test_root = tmp_path_factory.mktemp("ingestion_root")
     project_repo = os.environ.get("PROJECT_REPO", "wgpt-etl")
 
-    env = {
-        "KMAI_VERSION": os.environ.get("KMAI_VERSION", "1.0.4"),
-        "PROJECT_REPO": project_repo,
-        "ROOT_DIR": str(test_root),          # ← avoid /app1 entirely
-        "KMAI_REPO": os.environ.get("KMAI_REPO", "kmai-etl"),
-        # Keep any external INGESTION_CONFIG_FILE the pipeline sets.
-    }
-    with patch.dict(os.environ, env, clear=False):
-        logs_dir = Path(os.environ["ROOT_DIR"]) / project_repo / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        yield
+    monkeypatch.setenv("ROOT_DIR", str(test_root))
+    monkeypatch.setenv("PROJECT_REPO", project_repo)
+    monkeypatch.setenv("KMAI_VERSION", os.environ.get("KMAI_VERSION", "1.0.4"))
+    monkeypatch.setenv("KMAI_REPO", os.environ.get("KMAI_REPO", "kmai-etl"))
+
+    logs_dir = Path(os.environ["ROOT_DIR"]) / project_repo / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    yield
 
 @pytest.fixture(scope="session", autouse=True)
 def safe_locale():
