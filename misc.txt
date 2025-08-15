@@ -8,15 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # -----------------------------------------------------------------------------
-# 1) Make WGPT importable: insert the *parent* of WGPT into sys.path
-#    - Supports both bin/lib and bin/libs
-#    - Survives nested checkouts (…/wkmai-wgpt-etl/wkmai-wgpt-etl/…)
+# 1) Make WGPT importable (parent of WGPT on sys.path). Supports bin/lib & bin/libs.
 # -----------------------------------------------------------------------------
 def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path:
     parts = start.parts
     indices = [i for i, p in enumerate(parts) if p in markers]
     if indices:
-        return Path(*parts[: indices[-1] + 1])  # deepest marker
+        return Path(*parts[: indices[-1] + 1])  # deepest marker (handles nested checkouts)
     # Fallback: walk up until we see bin/lib(s)/WGPT
     for p in [start, *start.parents]:
         if (p / "bin" / "lib" / "WGPT").is_dir() or (p / "bin" / "libs" / "WGPT").is_dir():
@@ -26,23 +24,33 @@ def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path
 def _add_wgpt_parent_to_syspath(current_file: str) -> None:
     here = Path(current_file).resolve()
     repo_root = _find_repo_root(here)
-    candidates = [repo_root / "bin" / "lib", repo_root / "bin" / "libs"]
-    for cand in candidates:
+    for cand in (repo_root / "bin" / "lib", repo_root / "bin" / "libs"):
         if (cand / "WGPT").is_dir():
             s = str(cand)
             if s not in sys.path:
-                sys.path.insert(0, s)  # IMPORTANT: parent of WGPT, not WGPT itself
+                sys.path.insert(0, s)  # IMPORTANT: add parent of WGPT, not WGPT itself
             return
     raise ImportError(
         "Could not find WGPT package. Expected one of:\n"
         f"  {repo_root}/bin/lib/WGPT  or  {repo_root}/bin/libs/WGPT"
     )
 
-# Do this BEFORE any test tries to import WGPT.*
 _add_wgpt_parent_to_syspath(__file__)
 
 # -----------------------------------------------------------------------------
-# 2) Lightweight pyodbc shim so imports don’t fail in CI/EDP
+# 2) Make KMAI importable from /app1/ingestion/kmai-etl/<version>/libs
+#    (mirrors your VM layout exactly)
+# -----------------------------------------------------------------------------
+ROOT_DIR = os.environ.get("ROOT_DIR", "/app1/ingestion")
+KMAI_REPO = os.environ.get("KMAI_REPO", "kmai-etl")
+KMAI_VERSION = os.environ.get("KMAI_VERSION", "1.0.4")
+KMAI_LIB_PATH = os.path.join(ROOT_DIR, KMAI_REPO, KMAI_VERSION, "libs")  # parent of KMAI
+
+if KMAI_LIB_PATH not in sys.path:
+    sys.path.insert(0, KMAI_LIB_PATH)
+
+# -----------------------------------------------------------------------------
+# 3) Lightweight pyodbc shim so imports don’t fail in CI/EDP
 # -----------------------------------------------------------------------------
 class MockCursor:
     def execute(self, *args, **kwargs): pass
@@ -59,8 +67,7 @@ class MockConnection:
     def rollback(self): pass
     def commit(self): pass
     def getinfo(self, info):
-        # Common constant for SQL_DBMS_VER is 2
-        if info == 2:
+        if info == 2:  # SQL_DBMS_VER
             return "15.0.2000.5"
 
 class MockImporter:
@@ -84,35 +91,29 @@ class MockImporter:
             return module.__spec__
         return None
 
-# Ensure pyodbc is mockable before test collection imports it
 sys.meta_path.insert(0, MockImporter())
 
 # -----------------------------------------------------------------------------
-# 3) Helpers & Fixtures
+# 4) Helpers & Fixtures
 # -----------------------------------------------------------------------------
 def get_test_file_path(current_file, target_folder="wkmai-wgpt-etl"):
     absolute_path = os.path.abspath(current_file)
     path_parts = absolute_path.split(os.sep)
 
-    # Find last occurrence of target_folder
     if target_folder not in path_parts:
         raise ValueError(f"Target folder {target_folder} not in path: {absolute_path}")
     wgpt_index = len(path_parts) - 1 - path_parts[::-1].index(target_folder)
 
     source_path_parts = path_parts[: wgpt_index + 1]
 
-    # Remove "tests" from the path
     if "tests" in path_parts:
         tests_index = path_parts.index("tests")
         source_path_parts += path_parts[tests_index + 1 :]
     else:
         source_path_parts += path_parts[wgpt_index + 1 :]
 
-    # Strip 'test_' prefixes
     source_path_parts = [part[5:] if part.startswith("test_") else part for part in source_path_parts]
-
-    source_file_path = os.sep.join(source_path_parts)
-    return source_file_path
+    return os.sep.join(source_path_parts)
 
 @pytest.fixture
 def import_module():
@@ -127,19 +128,18 @@ def import_module():
 
 @pytest.fixture(scope="session", autouse=True)
 def mock_os_environ():
-    """Fixture to mock os.environ (do NOT clear to avoid clobbering EDP vars)."""
+    """Provide defaults; do NOT clear to preserve EDP-provided vars."""
     mock_env = {
-        "KMAI_VERSION": "1.0.4",
-        "PROJECT_REPO": "wgpt-etl",
-        "ROOT_DIR": "/tmp",
-        "KMAI_REPO": "kmai-etl",
+        "KMAI_VERSION": os.environ.get("KMAI_VERSION", "1.0.4"),
+        "PROJECT_REPO": os.environ.get("PROJECT_REPO", "wgpt-etl"),
+        "ROOT_DIR": os.environ.get("ROOT_DIR", "/app1/ingestion"),
+        "KMAI_REPO": os.environ.get("KMAI_REPO", "kmai-etl"),
     }
     with patch.dict(os.environ, mock_env, clear=False):
         yield mock_env
 
 @pytest.fixture
 def mock_db():
-    """Fixture to mock the database object."""
     mock_db = MagicMock()
     mock_db.executeQuery = MagicMock()
     mock_db.read_sql = MagicMock(return_value=([], []))
