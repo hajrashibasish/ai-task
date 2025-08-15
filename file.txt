@@ -1,13 +1,15 @@
-# tests/conftest.py
 import os
 import sys
 import importlib.util
+import logging
 from pathlib import Path
 from types import ModuleType
+from dataclasses import dataclass, field
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 import pytest
 
-# -------------------- Repo / path bootstrap --------------------
+# ======================= repo / path bootstrap =======================
 def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path:
     parts = start.parts
     idxs = [i for i, p in enumerate(parts) if p in markers]
@@ -18,163 +20,218 @@ def _find_repo_root(start: Path, markers=("wkmai-wgpt-etl", "wgpt-etl")) -> Path
             return p
     raise RuntimeError(f"Could not locate repo root from: {start}")
 
-def _wire_paths(current_file: str) -> None:
-    """Make WGPT and repo/bin (for usecase) importable without touching main scripts."""
+def _wire_paths(current_file: str) -> Path:
     here = Path(current_file).resolve()
     repo_root = _find_repo_root(here)
 
-    # 1) WGPT (supports both bin/lib and bin/libs)
+    # WGPT under bin/lib or bin/libs
     for cand in (repo_root / "bin" / "lib", repo_root / "bin" / "libs"):
         if (cand / "WGPT").is_dir():
             s = str(cand)
             if s not in sys.path:
-                sys.path.insert(0, s)  # parent of WGPT
+                sys.path.insert(0, s)
             break
 
-    # 2) repo/bin so that "usecase" and other first-party pkgs under bin/ are importable
+    # repo/bin (for 'usecase' and other first-party pkgs)
     bin_dir = str(repo_root / "bin")
     if bin_dir not in sys.path:
         sys.path.insert(0, bin_dir)
 
-_wire_paths(__file__)
+    return repo_root
 
-# -------------------- KMAI full stub (only if real KMAI is absent) --------------------
-def _ensure_kmai_stub():
+_REPO_ROOT = _wire_paths(__file__)
+
+# ======================= safe FileHandler ============================
+class _SafeFileHandler(logging.FileHandler):
+    def __init__(self, filename, *args, **kwargs):
+        try:
+            Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        super().__init__(filename, *args, **kwargs)
+
+# Install globally so any module using logging gets this behavior
+logging.FileHandler = _SafeFileHandler  # type: ignore[assignment]
+
+# ======================= KMAI shim / stub ===========================
+def _ensure_kmai_ok():
     spec = importlib.util.find_spec("KMAI")
-    if spec is not None:
-        return  # real KMAI exists – do nothing
+    if spec is None:
+        # Full stub
+        kmai_pkg = ModuleType("KMAI")
 
-    kmai_pkg = ModuleType("KMAI")
+        # azure
+        azure_mod = ModuleType("KMAI.azure")
+        class AzureDB:
+            def __init__(self, *_, **__): ...
+            def __enter__(self): return self
+            def __exit__(self, *a): ...
+            def executeQuery(self, *a, **k): return []
+            def read_sql(self, *a, **k): return ([], [])
+            def execute_insert(self, *a, **k): return None
+        class AzureSearchIndex:
+            def __init__(self, *_, **__): ...
+            def upsert(self, *a, **k): ...
+            def search(self, *a, **k): return []
+        class AzureADLS:
+            def __init__(self, *_, **__): ...
+            def upload(self, *a, **k): ...
+            def download(self, *a, **k): return b""
+            def exists(self, *a, **k): return False
+            def listdir(self, *a, **k): return []
+        azure_mod.AzureDB = AzureDB
+        azure_mod.AzureSearchIndex = AzureSearchIndex
+        azure_mod.AzureADLS = AzureADLS
 
-    # ---- KMAI.azure ----
-    azure_mod = ModuleType("KMAI.azure")
+        # ingestion
+        ingestion_mod = ModuleType("KMAI.ingestion")
+        class DocumentRetrieval:  # pragma: no cover
+            def __init__(self, *_, **__): ...
+            def fetch(self, *a, **k): return []
+        class Pdf2Markdown:
+            def __init__(self, *_, **__): ...
+            def convert(self, *a, **k): return "# stub md"
+        class Excel2Markdown:
+            def __init__(self, *_, **__): ...
+            def convert(self, *a, **k): return "# stub table md"
+        class Ppt2Markdown:
+            def __init__(self, *_, **__): ...
+            def convert(self, *a, **k): return "# stub ppt md"
+        class DocumentList:
+            def __init__(self, *_, **__): ...
+            def get_urls_by_hash(self, *a, **k): return []
+            def get_urls(self, *a, **k): return []
+            def enrich(self, *a, **k): return []
+        class TDCertificate:
+            def __init__(self, *_, **__): ...
+            def validate(self, *a, **k): return True
+        ingestion_mod.DocumentRetrieval = DocumentRetrieval
+        ingestion_mod.Pdf2Markdown = Pdf2Markdown
+        ingestion_mod.Excel2Markdown = Excel2Markdown
+        ingestion_mod.Ppt2Markdown = Ppt2Markdown
+        ingestion_mod.DocumentList = DocumentList
+        ingestion_mod.TDCertificate = TDCertificate
 
-    class AzureDB:
-        def __init__(self, *args, **kwargs): pass
-        def __enter__(self): return self
-        def __exit__(self, exc_type, exc, tb): pass
-        def executeQuery(self, *a, **k): return []
-        def read_sql(self, *a, **k): return ([], [])
-        def execute_insert(self, *a, **k): return None
+        # processing
+        processing_mod = ModuleType("KMAI.processing")
+        class KMAIDocumentProcessing:
+            def __init__(self, *_, **__): ...
+            def process(self, *a, **k): ...
+            def clean_markdown(self, s): return s
+            def postprocess(self, s): return s
+        class DocumentSplit:
+            def __init__(self, *_, **__): ...
+            def split(self, *a, **k): return []
+        class ArchiveProcessing:
+            def __init__(self, *_, **__): ...
+            def export_document_list(self, *a, **k): ...
+            def archive_raw_files(self, *a, **k): ...
+            def archive_md_files(self, *a, **k): ...
+            def upload_to_adls(self, *a, **k): ...
+            def check_index(self, *a, **k): return True
+        processing_mod.KMAIDocumentProcessing = KMAIDocumentProcessing
+        processing_mod.DocumentSplit = DocumentSplit
+        processing_mod.ArchiveProcessing = ArchiveProcessing
 
-    class AzureSearchIndex:
-        def __init__(self, *args, **kwargs): pass
-        def upsert(self, *a, **k): return None
-        def search(self, *a, **k): return []
+        # utilities
+        utilities_mod = ModuleType("KMAI.utilities")
+        def read_config(*a, **k): return {}
+        def read_json_config(*a, **k): return {}
+        utilities_mod.read_config = read_config
+        utilities_mod.read_json_config = read_json_config
 
-    class AzureADLS:
-        def __init__(self, *args, **kwargs): pass
-        def upload(self, *a, **k): return None
-        def download(self, *a, **k): return b""
-        def exists(self, *a, **k): return False
-        def listdir(self, *a, **k): return []
+        # wire
+        kmai_pkg.azure = azure_mod
+        kmai_pkg.ingestion = ingestion_mod
+        kmai_pkg.processing = processing_mod
+        kmai_pkg.utilities = utilities_mod
+        sys.modules.update({
+            "KMAI": kmai_pkg,
+            "KMAI.azure": azure_mod,
+            "KMAI.ingestion": ingestion_mod,
+            "KMAI.processing": processing_mod,
+            "KMAI.utilities": utilities_mod,
+        })
+        return
 
-    azure_mod.AzureDB = AzureDB
-    azure_mod.AzureSearchIndex = AzureSearchIndex
-    azure_mod.AzureADLS = AzureADLS
+    # If real KMAI is present, augment any missing pieces referenced by tests
+    import importlib
+    KMAI = importlib.import_module("KMAI")
+    def _ensure_submodule(name: str) -> ModuleType:
+        full = f"KMAI.{name}"
+        mod = sys.modules.get(full)
+        if mod is None:
+            mod = ModuleType(full)
+            setattr(KMAI, name.split(".")[0], mod)
+            sys.modules[full] = mod
+        return mod
+    proc = _ensure_submodule("processing")
+    util = _ensure_submodule("utilities")
+    if not hasattr(proc, "ArchiveProcessing"):
+        class ArchiveProcessing:
+            def __init__(self, *_, **__): ...
+            def export_document_list(self, *a, **k): ...
+            def archive_raw_files(self, *a, **k): ...
+            def archive_md_files(self, *a, **k): ...
+            def upload_to_adls(self, *a, **k): ...
+            def check_index(self, *a, **k): return True
+        proc.ArchiveProcessing = ArchiveProcessing
+    if not hasattr(util, "read_json_config"):
+        def read_json_config(*a, **k): return {}
+        util.read_json_config = read_json_config
 
-    # ---- KMAI.ingestion ----
-    ingestion_mod = ModuleType("KMAI.ingestion")
+_ensure_kmai_ok()
 
-    class DocumentRetrieval:
-        def __init__(self, *args, **kwargs): pass
-        def fetch(self, *a, **k): return []
+# ======================= usecase stub (if absent) ====================
+def _ensure_usecase_stub():
+    if importlib.util.find_spec("usecase") is not None:
+        return
+    prod_pkg = ModuleType("usecase.prod")
+    common_pkg = ModuleType("usecase.prod.common")
+    dataclasses_mod = ModuleType("usecase.prod.common.dataclasses")
 
-    class Pdf2Markdown:
-        def __init__(self, *args, **kwargs): pass
-        def convert(self, *a, **k): return "# stub md"
+    @dataclass
+    class IngestionConfig:
+        source: str = ""
+        params: Dict[str, Any] = field(default_factory=dict)
 
-    class Excel2Markdown:
-        def __init__(self, *args, **kwargs): pass
-        def convert(self, *a, **k): return "# stub table md"
+    @dataclass
+    class DocumentWithMetadata:
+        content: str = ""
+        metadata: Dict[str, Any] = field(default_factory=dict)
 
-    class Ppt2Markdown:  # needed by bin/03_doc_conversion.py
-        def __init__(self, *args, **kwargs): pass
-        def convert(self, *a, **k): return "# stub ppt md"
+    dataclasses_mod.IngestionConfig = IngestionConfig
+    dataclasses_mod.DocumentWithMetadata = DocumentWithMetadata
 
-    class DocumentList:
-        def __init__(self, *args, **kwargs): pass
-        def get_urls_by_hash(self, *a, **k): return []
-        def get_urls(self, *a, **k): return []
-        def enrich(self, *a, **k): return []
+    usecase_pkg = ModuleType("usecase")
+    usecase_pkg.prod = prod_pkg
+    prod_pkg.common = common_pkg
+    common_pkg.dataclasses = dataclasses_mod
 
-    class TDCertificate:
-        def __init__(self, *args, **kwargs): pass
-        def validate(self, *a, **k): return True
+    sys.modules.update({
+        "usecase": usecase_pkg,
+        "usecase.prod": prod_pkg,
+        "usecase.prod.common": common_pkg,
+        "usecase.prod.common.dataclasses": dataclasses_mod,
+    })
 
-    ingestion_mod.DocumentRetrieval = DocumentRetrieval
-    ingestion_mod.Pdf2Markdown = Pdf2Markdown
-    ingestion_mod.Excel2Markdown = Excel2Markdown
-    ingestion_mod.Ppt2Markdown = Ppt2Markdown
-    ingestion_mod.DocumentList = DocumentList
-    ingestion_mod.TDCertificate = TDCertificate
+_ensure_usecase_stub()
 
-    # ---- KMAI.processing ----
-    processing_mod = ModuleType("KMAI.processing")
-
-    class KMAIDocumentProcessing:
-        def __init__(self, *args, **kwargs): pass
-        def process(self, *a, **k): return None
-        def clean_markdown(self, s): return s
-        def postprocess(self, s): return s
-
-    class DocumentSplit:
-        def __init__(self, *args, **kwargs): pass
-        def split(self, *a, **k): return []
-
-    class ArchiveProcessing:  # required by archive tests
-        def __init__(self, *args, **kwargs): pass
-        def export_document_list(self, *a, **k): return None
-        def archive_raw_files(self, *a, **k): return None
-        def archive_md_files(self, *a, **k): return None
-        def upload_to_adls(self, *a, **k): return None
-        def check_index(self, *a, **k): return True
-
-    processing_mod.KMAIDocumentProcessing = KMAIDocumentProcessing
-    processing_mod.DocumentSplit = DocumentSplit
-    processing_mod.ArchiveProcessing = ArchiveProcessing
-
-    # ---- KMAI.utilities ----
-    utilities_mod = ModuleType("KMAI.utilities")
-
-    def read_config(*args, **kwargs):
-        return {}
-
-    def read_json_config(*args, **kwargs):
-        return {}
-
-    utilities_mod.read_config = read_config
-    utilities_mod.read_json_config = read_json_config
-
-    # Wire up the package
-    kmai_pkg.azure = azure_mod
-    kmai_pkg.ingestion = ingestion_mod
-    kmai_pkg.processing = processing_mod
-    kmai_pkg.utilities = utilities_mod
-
-    sys.modules["KMAI"] = kmai_pkg
-    sys.modules["KMAI.azure"] = azure_mod
-    sys.modules["KMAI.ingestion"] = ingestion_mod
-    sys.modules["KMAI.processing"] = processing_mod
-    sys.modules["KMAI.utilities"] = utilities_mod
-
-_ensure_kmai_stub()
-
-# -------------------- pyodbc shim --------------------
+# ======================= pyodbc shim ================================
 class _MockCursor:
-    def execute(self, *a, **k): pass
+    def execute(self, *a, **k): ...
     def fetchone(self): return ("15.0.2000.5",)
-    def setinputsizes(self, *a, **k): return
+    def setinputsizes(self, *a, **k): ...
     @property
     def description(self): return [("ProductVersion", None, None, None, None)]
-    def rowcount(self): return
-    def close(self): pass
+    def rowcount(self): ...
+    def close(self): ...
 
 class _MockConnection:
     def cursor(self): return _MockCursor()
-    def add_output_converter(self, *a, **k): pass
-    def rollback(self): pass
-    def commit(self): pass
+    def add_output_converter(self, *a, **k): ...
+    def rollback(self): ...
+    def commit(self): ...
     def getinfo(self, info):
         if info == 2:  # SQL_DBMS_VER
             return "15.0.2000.5"
@@ -202,7 +259,7 @@ class _MockImporter:
 
 sys.meta_path.insert(0, _MockImporter())
 
-# -------------------- helpers & fixtures --------------------
+# ======================= helpers & fixtures =========================
 def get_test_file_path(current_file, target_folder="wkmai-wgpt-etl"):
     absolute_path = os.path.abspath(current_file)
     parts = absolute_path.split(os.sep)
@@ -228,53 +285,53 @@ def import_module():
     return _import_module
 
 @pytest.fixture(scope="session", autouse=True)
-def mock_os_environ():
-    # Provide defaults but let CI override via env
+def mock_os_environ(tmp_path_factory):
+    """
+    *** Key fix for EDP ***
+    Use a writable temp root instead of /app1/ingestion and create logs dir eagerly.
+    """
+    test_root = tmp_path_factory.mktemp("ingestion_root")
+    project_repo = os.environ.get("PROJECT_REPO", "wgpt-etl")
+
     env = {
         "KMAI_VERSION": os.environ.get("KMAI_VERSION", "1.0.4"),
-        "PROJECT_REPO": os.environ.get("PROJECT_REPO", "wgpt-etl"),
-        "ROOT_DIR": os.environ.get("ROOT_DIR", "/app1/ingestion"),
+        "PROJECT_REPO": project_repo,
+        "ROOT_DIR": str(test_root),          # ← avoid /app1 entirely
         "KMAI_REPO": os.environ.get("KMAI_REPO", "kmai-etl"),
+        # Keep any external INGESTION_CONFIG_FILE the pipeline sets.
     }
     with patch.dict(os.environ, env, clear=False):
-        # Ensure log dir exists so logging.FileHandler doesn’t explode
-        logs_dir = Path(os.environ["ROOT_DIR"]) / os.environ["PROJECT_REPO"] / "logs"
+        logs_dir = Path(os.environ["ROOT_DIR"]) / project_repo / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         yield
 
 @pytest.fixture(scope="session", autouse=True)
 def safe_locale():
-    # Fallback to "C" locale if requested one isn’t installed in runner
     import locale
-    orig = locale.setlocale
+    original = locale.setlocale
     def _safe_setlocale(category, loc=None):
         try:
-            return orig(category, loc)
+            return original(category, loc)
         except locale.Error:
-            return orig(category, "C")
-    # Monkeypatch in place (no Mock) for correctness
-    saved = locale.setlocale
+            return original(category, "C")
     locale.setlocale = _safe_setlocale
     try:
         yield
     finally:
-        locale.setlocale = saved
+        locale.setlocale = original
 
 @pytest.fixture(scope="session", autouse=True)
 def patch_wgpt_document_processing():
-    # If certain NACO helpers aren’t present in WGPT.DocumentProcessing, provide benign pass-throughs.
     try:
-        import WGPT
         from WGPT import document_processing as _dp
         cls = getattr(_dp, "DocumentProcessing", None)
         if not cls:
             return
-        def _id(self, s): return s
+        def _identity(self, s): return s
         for name in ("naco_doc_preprocess", "naco_doc_basic_clean_html", "naco_doc_post_clean_md"):
             if not hasattr(cls, name):
-                setattr(cls, name, _id)
+                setattr(cls, name, _identity)
     except Exception:
-        # Don’t break test discovery if WGPT isn’t importable here; other fixtures will handle pathing
         pass
 
 @pytest.fixture
