@@ -1,18 +1,64 @@
-def test_process_ppt_to_markdown(load_module):
-    mock_ppt = MagicMock()
-    mock_instance = MagicMock()
-    # ✅ Return two values as expected by the main function
-    mock_instance.convert.return_value = ("slides.md", 123)
-    mock_ppt.return_value = mock_instance
+#!/usr/bin/env bash
+set -euo pipefail
 
-    return_values = {}
-    file_path = "/ppt/slides.pptx"
-    output_dir = "/output"
+PROJECT_ROOT="/app1/ingestion/wgpt-etl"
+PACKAGE_DIR="/app1/ingestion/veracode_package"
+ZIP_FILE="/app1/ingestion/wgpt-etl-veracode.zip"
 
-    with patch.object(load_module, "Ppt2Markdown", mock_ppt):
-        result = load_module.process_ppt_to_markdown(file_path, output_dir, return_values)
+echo "▶ Cleaning old builds and caches"
+rm -f "$ZIP_FILE"
+rm -rf "$PACKAGE_DIR" .venv venv __pycache__ */__pycache__
+pip cache purge || true
 
-    assert isinstance(result, dict)
-    assert result.get("status") == "Successful"
-    assert result.get("document_length") == 123
-    assert result.get("md_file_location") == "slides.md"
+echo "▶ Creating virtual environment and installing from requirements.txt"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r "$PROJECT_ROOT/requirements.txt"
+
+echo "▶ Verifying critical packages"
+python - <<'PY'
+import importlib.metadata as m
+from packaging.version import Version
+def v(p): 
+    try: return Version(m.version(p))
+    except: return None
+checks = {
+    "h11": "0.16.0",
+    "httpx": "0.28.0",
+    "httpcore": "1.0.0",
+}
+for pkg, minver in checks.items():
+    actual = v(pkg)
+    if not actual:
+        print(f"❌ {pkg} not installed")
+    elif actual < Version(minver):
+        print(f"❌ {pkg} too old: {actual} < {minver}")
+        exit(2)
+    else:
+        print(f"✅ {pkg} OK ({actual})")
+PY
+
+echo "▶ Creating clean package folder"
+mkdir -p "$PACKAGE_DIR"
+rsync -av --delete \
+  --exclude='*.md' \
+  --exclude='*.log' \
+  --exclude='*.pptx' \
+  --exclude='*.xlsx' \
+  --exclude='*.pdf' \
+  --exclude='*.jpg' \
+  --exclude='*.pyc' \
+  --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' \
+  --exclude='.git/' \
+  --exclude='.venv/' \
+  "$PROJECT_ROOT/" "$PACKAGE_DIR/"
+
+cp "$PROJECT_ROOT/requirements.txt" "$PACKAGE_DIR/"
+
+echo "▶ Zipping for Veracode"
+cd "$PACKAGE_DIR"
+zip -qr "$ZIP_FILE" .
+
+echo "✅ Veracode package ready: $ZIP_FILE"
