@@ -1,19 +1,17 @@
-def test_process_excel_to_markdown(load_module):
-    mock_dp = MagicMock()
-    mock_instance = MagicMock()
+# 1) Show broken requirements in the current venv
+pip check
 
-    mock_output = "## Table\n|A|B|\n|--|--|\n|1|2|"
-    mock_instance.run_pipeline.return_value = mock_output
-    mock_dp.return_value = mock_instance
+# 2) Show who depends on h11/httpcore/httpx (reverse graph via pipenv)
+pipenv graph --reverse | sed -n '/h11/,$p'
+pipenv graph --reverse | sed -n '/httpcore/,$p'
+pipenv graph --reverse | sed -n '/httpx/,$p'
 
-    config_mock = {}  # not used by excel conversion
-    return_values = {}
-
-    file_path = "/some/file.xlsx"
-    output_dir = "/output"
-
-    with patch.object(load_module, "DocumentProcessing", mock_dp):
-        result = load_module.process_excel_to_markdown(config_mock, file_path, output_dir, return_values)
-
-    assert isinstance(result, dict)
-    assert result.get("document_length") == len(mock_output)
+# 3) Quick sanity on versions actually installed
+python - <<'PY'
+import importlib.metadata as m
+for name in ("h11","httpcore","httpx","uvicorn","starlette","fastapi","langchain","openai"):
+    try:
+        print(f"{name}: {m.version(name)}")
+    except m.PackageNotFoundError:
+        pass
+PY
