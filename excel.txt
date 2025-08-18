@@ -1,25 +1,112 @@
-# 1) Show broken requirements in the current venv
-pip check
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 2) Show who depends on h11/httpcore/httpx (reverse graph via pipenv)
-pipenv graph --reverse | sed -n '/h11/,$p'
-pipenv graph --reverse | sed -n '/httpcore/,$p'
-pipenv graph --reverse | sed -n '/httpx/,$p'
+# ---------- Paths ----------
+PROJECT_ROOT="/app1/ingestion/wgpt-etl"
+PACKAGE_DIR="/app1/ingestion/veracode_package"
+ZIP_FILE="/app1/ingestion/wgpt-etl-veracode.zip"
 
-# 3) Quick sanity on versions actually installed
-python - <<'PY'
+# ---------- Helper ----------
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+need() { command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"; }
+
+# ---------- Pre-flight ----------
+need pip
+need python
+need rsync
+need zip
+need pipenv
+
+cd "$PROJECT_ROOT"
+
+echo "▶ Cleaning previous build artifacts…"
+rm -f "$ZIP_FILE"
+rm -rf "$PACKAGE_DIR"
+mkdir -p "$PACKAGE_DIR"
+
+echo "▶ Nuking any pipenv/venv/caches tied to this project…"
+# Remove pipenv-managed venv for this Pipfile (if any)
+pipenv --rm >/dev/null 2>&1 || true
+
+# Remove common local venvs if present
+rm -rf .venv venv .pytest_cache __pycache__ */__pycache__ || true
+
+# Clear pip wheels cache (helps avoid stale resolutions)
+pip cache purge >/dev/null 2>&1 || true
+
+echo "▶ Installing from requirements.txt into a fresh Pipenv…"
+# This creates Pipfile from requirements.txt and installs exact pins
+pipenv install -r requirements.txt
+
+echo "▶ Forcing a fresh lock (no cached artifacts)…"
+pipenv lock --clear -v
+
+echo "▶ Verifying critical package versions in the new environment…"
+pipenv run python - <<'PY'
 import importlib.metadata as m
-for name in ("h11","httpcore","httpx","uvicorn","starlette","fastapi","langchain","openai"):
+def gv(n):
     try:
-        print(f"{name}: {m.version(name)}")
+        return m.version(n)
     except m.PackageNotFoundError:
-        pass
+        return "NOT INSTALLED"
+targets = ("h11","httpcore","httpx","uvicorn","starlette","fastapi","langchain","openai")
+for t in targets:
+    print(f"{t}: {gv(t)}")
 PY
 
-python - <<'PY'
-import importlib.metadata as m
-for n in ("h11","httpcore","httpx","uvicorn","starlette","fastapi","langchain","openai"):
-    try: print(f"{n}: {m.version(n)}")
-    except m.PackageNotFoundError: pass
+echo "▶ Asserting h11>=0.16 and httpx>=0.28 are in effect…"
+pipenv run python - <<'PY'
+import sys, importlib.metadata as m
+def v(name):
+    from packaging.version import Version
+    return Version(m.version(name))
+ok = True
+try:
+    if v("h11") < __import__("packaging.version").version.Version("0.16.0"):
+        print("h11 is too old", file=sys.stderr); ok=False
+    if v("httpx") < __import__("packaging.version").version.Version("0.28.0"):
+        print("httpx is too old", file=sys.stderr); ok=False
+    if v("httpcore") < __import__("packaging.version").version.Version("1.0.0"):
+        print("httpcore is too old", file=sys.stderr); ok=False
+except Exception as e:
+    print(f"Version check failed: {e}", file=sys.stderr); ok=False
+if not ok: sys.exit(2)
 PY
 
+echo "▶ Preparing clean packaging directory (source sync with excludes)…"
+rsync -av \
+  --delete \
+  --exclude='*.md' \
+  --exclude='*.html' \
+  --exclude='*.pptx' \
+  --exclude='*.xlsx' \
+  --exclude='*.log' \
+  --exclude='*.pyc' \
+  --exclude='*.pyo' \
+  --exclude='*.pdf' \
+  --exclude='*.jpg' \
+  --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' \
+  --exclude='.venv/' \
+  --exclude='venv/' \
+  --exclude='.git/' \
+  --exclude='.gitignore' \
+  --exclude='.mypy_cache/' \
+  --exclude='.ruff_cache/' \
+  --exclude='.DS_Store' \
+  "$PROJECT_ROOT/" "$PACKAGE_DIR/"
+
+echo "▶ Copying manifest(s) that Veracode should scan…"
+# Keep both, but ensure they are in sync; Pipfile.lock reflects the fresh environment
+cp "$PROJECT_ROOT/requirements.txt" "$PACKAGE_DIR/requirements.txt"
+cp "$PROJECT_ROOT/Pipfile.lock"     "$PACKAGE_DIR/Pipfile.lock"
+
+# Optional: if you want to avoid Veracode seeing *any* other manifests, remove strays:
+find "$PACKAGE_DIR" -type f \( -iname "poetry.lock" -o -iname "Pipfile" -o -iname "requirements-*.txt" \) -delete || true
+
+echo "▶ Creating zip for Veracode STAT scan…"
+cd "$PACKAGE_DIR"
+zip -qr "$ZIP_FILE" .
+
+echo "✅ Veracode STAT scan zip created at: $ZIP_FILE"
