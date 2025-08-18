@@ -15,3 +15,11 @@ for name in ("h11","httpcore","httpx","uvicorn","starlette","fastapi","langchain
     except m.PackageNotFoundError:
         pass
 PY
+
+python - <<'PY'
+import importlib.metadata as m
+for n in ("h11","httpcore","httpx","uvicorn","starlette","fastapi","langchain","openai"):
+    try: print(f"{n}: {m.version(n)}")
+    except m.PackageNotFoundError: pass
+PY
+
